@@ -505,3 +505,34 @@ def test_quota_message_names_the_tier_and_limit():
     assert "20" in message
     assert "gemini-3.6-flash" in message
     assert _retry_delay(FakeResponse()) == 37
+
+
+# ------------------------------------------------------------ פרוקסי לתמלולים
+
+def test_no_proxy_by_default(monkeypatch):
+    from src import transcript
+
+    for var in ("WEBSHARE_PROXY_USERNAME", "WEBSHARE_PROXY_PASSWORD",
+                "HTTP_PROXY_URL", "HTTPS_PROXY_URL"):
+        monkeypatch.delenv(var, raising=False)
+    assert transcript._proxy_config() is None
+    assert transcript.proxy_is_configured() is False
+
+
+def test_webshare_proxy_detected(monkeypatch):
+    from src import transcript
+
+    monkeypatch.setenv("WEBSHARE_PROXY_USERNAME", "u")
+    monkeypatch.setenv("WEBSHARE_PROXY_PASSWORD", "p")
+    assert transcript.proxy_is_configured() is True
+    assert type(transcript._proxy_config()).__name__ == "WebshareProxyConfig"
+
+
+def test_generic_proxy_detected(monkeypatch):
+    from src import transcript
+
+    monkeypatch.delenv("WEBSHARE_PROXY_USERNAME", raising=False)
+    monkeypatch.delenv("WEBSHARE_PROXY_PASSWORD", raising=False)
+    monkeypatch.setenv("HTTP_PROXY_URL", "http://user:pass@host:8080")
+    assert transcript.proxy_is_configured() is True
+    assert type(transcript._proxy_config()).__name__ == "GenericProxyConfig"

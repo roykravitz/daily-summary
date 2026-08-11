@@ -24,16 +24,48 @@ PREFERRED_LANGS = ["he", "iw", "en", "en-US"]
 
 
 def _proxy_config():
-    """תמיכה אופציונלית ב-Webshare (מומלץ אם מריצים ב-GitHub Actions)."""
+    """פרוקסי אופציונלי לתמלולים — נחוץ כשמריצים בענן.
+
+    שתי דרכים, לפי סדר עדיפות:
+    1. Webshare — WEBSHARE_PROXY_USERNAME / WEBSHARE_PROXY_PASSWORD
+    2. כל פרוקסי אחר — HTTP_PROXY_URL (וגם HTTPS_PROXY_URL אם שונה)
+
+    חשוב: יוטיוב חוסם כתובות של מרכזי נתונים. פרוקסי מסוג datacenter,
+    כולל השכבה החינמית של Webshare, כנראה ייחסם בדיוק כמו שרתי GitHub.
+    מה שעובד בפועל הוא פרוקסי residential.
+    """
     user = os.getenv("WEBSHARE_PROXY_USERNAME")
     password = os.getenv("WEBSHARE_PROXY_PASSWORD")
-    if not (user and password):
-        return None
-    try:
-        from youtube_transcript_api.proxies import WebshareProxyConfig
-    except ImportError:
-        return None
-    return WebshareProxyConfig(proxy_username=user, proxy_password=password)
+    if user and password:
+        try:
+            from youtube_transcript_api.proxies import WebshareProxyConfig
+        except ImportError:
+            log.warning("הגרסה המותקנת של youtube-transcript-api לא תומכת בפרוקסי")
+            return None
+        log.info("משתמש בפרוקסי Webshare")
+        return WebshareProxyConfig(proxy_username=user, proxy_password=password)
+
+    http_url = os.getenv("HTTP_PROXY_URL")
+    if http_url:
+        try:
+            from youtube_transcript_api.proxies import GenericProxyConfig
+        except ImportError:
+            log.warning("הגרסה המותקנת של youtube-transcript-api לא תומכת בפרוקסי")
+            return None
+        log.info("משתמש בפרוקסי כללי")
+        return GenericProxyConfig(
+            http_url=http_url,
+            https_url=os.getenv("HTTPS_PROXY_URL") or http_url,
+        )
+
+    return None
+
+
+def proxy_is_configured() -> bool:
+    return bool(
+        (os.getenv("WEBSHARE_PROXY_USERNAME") and os.getenv("WEBSHARE_PROXY_PASSWORD"))
+        or os.getenv("HTTP_PROXY_URL")
+    )
 
 
 def _via_api(video_id: str) -> str:
@@ -88,5 +120,12 @@ def fetch_transcript(video_id: str, retries: int = 1) -> str:
                 log.debug("%s נכשל ל-%s (ניסיון %d): %s", method.__name__, video_id, attempt + 1, exc)
                 if attempt < retries:
                     time.sleep(2)
-    log.warning("לא הצלחתי למשוך תמלול ל-%s", video_id)
+    if proxy_is_configured():
+        log.warning("לא הצלחתי למשוך תמלול ל-%s למרות הפרוקסי", video_id)
+    else:
+        log.warning(
+            "לא הצלחתי למשוך תמלול ל-%s. אם זו ריצה בענן, יוטיוב חוסם את "
+            "כתובת השרת — צריך פרוקסי residential. ראה את הסעיף על תמלולים ב-README.",
+            video_id,
+        )
     return ""
