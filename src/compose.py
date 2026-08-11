@@ -117,12 +117,22 @@ def build_message(summaries: list[tuple], language: str, tz: str) -> str:
     lines = []
     for item, summary in summaries:
         lines.append(source_header(item, tz, language))
-        lines.append(item.title)
+        if not _title_repeats(item.title, summary):
+            lines.append(item.title)
         lines.append(summary)
         lines.append(item.url)
         lines.append("")
 
     return "\n".join(lines).strip()
+
+
+def _title_repeats(title: str, summary: str) -> bool:
+    """בציוץ הכותרת היא הטקסט עצמו — אין טעם להדפיס אותו פעמיים."""
+    def norm(text: str) -> str:
+        return " ".join(text.split())[:80]
+
+    a, b = norm(title), norm(summary)
+    return bool(a) and (a == b or b.startswith(a) or a.startswith(b))
 
 
 def split_message(text: str, limit: int = SAFE_CHUNK) -> list[str]:

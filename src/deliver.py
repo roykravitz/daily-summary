@@ -63,6 +63,52 @@ def send_telegram(text: str, target: dict) -> bool:
     return ok
 
 
+MAX_PHOTOS_PER_RUN = 10
+CAPTION_LIMIT = 1000
+
+
+def send_telegram_photos(items: list, target: dict, tz: str = "Asia/Jerusalem",
+                         language: str = "he") -> int:
+    """שולח תמונות שנמצאו בפריטים, אחרי הודעת הטקסט.
+
+    טלגרם מוריד את התמונה בעצמו מהכתובת, ולכן אין כאן העלאה ואין עלות.
+    מחזיר כמה נשלחו.
+    """
+    from .compose import source_header
+
+    token = os.getenv(target.get("bot_token_env") or "TELEGRAM_BOT_TOKEN")
+    chat_id = str(target.get("chat_id") or "") or os.getenv(
+        target.get("chat_id_env") or "TELEGRAM_CHAT_ID", ""
+    )
+    if not (token and chat_id):
+        return 0
+
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    sent = 0
+    for item in items:
+        for photo in item.images:
+            if sent >= MAX_PHOTOS_PER_RUN:
+                log.info("הגעתי למגבלת %d תמונות בריצה", MAX_PHOTOS_PER_RUN)
+                return sent
+            caption = f"{source_header(item, tz, language)}\n{item.url}"
+            try:
+                resp = requests.post(
+                    url,
+                    data={"chat_id": chat_id, "photo": photo,
+                          "caption": caption[:CAPTION_LIMIT]},
+                    timeout=TIMEOUT,
+                )
+                if resp.ok:
+                    sent += 1
+                else:
+                    log.warning("שליחת תמונה נכשלה (%s): %s", resp.status_code,
+                                resp.text[:150])
+            except requests.RequestException as exc:
+                log.warning("שליחת תמונה נכשלה: %s", exc)
+            time.sleep(0.5)
+    return sent
+
+
 def send_email(text: str, target: dict) -> bool:
     user = os.getenv("SMTP_USER")
     password = os.getenv("SMTP_PASS")

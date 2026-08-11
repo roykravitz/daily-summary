@@ -16,7 +16,7 @@ from pathlib import Path
 
 from .compose import build_message
 from .config import ROOT, Config, Topic, load_config, load_env
-from .deliver import deliver
+from .deliver import deliver, send_telegram_photos
 from .fetchers import fetch_source, load_content
 from .llm import summarize
 from .state import State
@@ -71,8 +71,15 @@ def collect_topic(topic: Topic, cfg: Config, state: State, force: bool) -> list[
             log.info("    פריט: %s", item.title[:70])
             load_content(src.type, item)
             if not item.has_content:
-                log.info("      אין מספיק תוכן לסיכום — מדלג")
+                log.info("      אין תוכן — מדלג")
                 continue
+
+            if not item.needs_summary:
+                # קצר מכדי לסכם. מציגים כלשונו — נאמן יותר, ולא עולה מהמכסה.
+                log.info("      קצר (%d תווים) — מוצג כלשונו", len(item.content))
+                results.append((item, item.content.strip()))
+                continue
+
             # מיקוד ברמת הנושא משמש כברירת מחדל למקורות שלא הגדירו משלהם
             item.focus = item.focus or topic.focus
             summary = summarize(
@@ -159,6 +166,14 @@ def main() -> int:
             log.error("  שליחה נכשלה לנושא %s — יישלח שוב בריצה הבאה", topic.name)
             failed_any = True
             continue
+
+        with_images = [item for item, _ in summaries if item.images]
+        if with_images:
+            for target in topic.targets:
+                if target.get("type") == "telegram":
+                    count = send_telegram_photos(with_images, target, cfg.timezone, cfg.language)
+                    if count:
+                        log.info("  נשלחו %d תמונות", count)
 
         for item, _ in summaries:
             state.mark_sent(item.state_key)

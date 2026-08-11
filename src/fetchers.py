@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from urllib.parse import unquote
 from xml.etree import ElementTree as ET
 
 import requests
@@ -32,6 +33,10 @@ NS = {
     "content": "http://purl.org/rss/1.0/modules/content/",
 }
 
+MIN_CONTENT = 30      # מתחת לזה אין מה להציג
+VERBATIM_MAX = 600    # מתחת לזה מציגים כלשונו, בלי לפנות למודל
+MAX_IMAGES_PER_ITEM = 4
+
 
 @dataclass
 class Item:
@@ -49,10 +54,16 @@ class Item:
     # לחלק מהמקורות אין תאריך פרסום ואנחנו יודעים רק מתי שלפנו. אסור להציג
     # את זה כזמן פרסום — זה בדיוק האות שגורם לחשוב שתוכן ישן הוא טרי.
     published_is_fetch_time: bool = False
+    images: list[str] = field(default_factory=list)
 
     @property
     def has_content(self) -> bool:
-        return len(self.content.strip()) >= 200
+        return len(self.content.strip()) >= MIN_CONTENT
+
+    @property
+    def needs_summary(self) -> bool:
+        """טקסט קצר מוצג כלשונו. ציוץ הוא כבר תמציתי — סיכום שלו רק מרחיק מהמקור."""
+        return len(self.content.strip()) >= VERBATIM_MAX
 
 
 def _get(url: str, **kw) -> requests.Response:
@@ -77,6 +88,25 @@ def _parse_date(text: str | None) -> datetime | None:
             continue
     log.debug("לא הצלחתי לפענח תאריך: %r", text)
     return None
+
+
+_IMG_RE = re.compile(r'<img[^>]+src="([^"]+)"', re.I)
+
+
+def _extract_images(raw_html: str) -> list[str]:
+    """כתובות התמונות שבפריט.
+
+    מראות Nitter מגישות תמונות דרך /pic/, ומתרגמות ל-CDN של טוויטר.
+    עדיף להצביע ישירות על המקור — הוא יציב, בעוד מראות מתחלפות ונופלות.
+    """
+    urls = []
+    for src in _IMG_RE.findall(html.unescape(raw_html)):
+        if "/pic/" in src:
+            path = unquote(src.split("/pic/", 1)[1])
+            src = "https://pbs.twimg.com/" + path.lstrip("/")
+        if src.startswith("http") and src not in urls:
+            urls.append(src)
+    return urls[:MAX_IMAGES_PER_ITEM]
 
 
 def _strip_html(raw: str) -> str:
@@ -222,13 +252,17 @@ def fetch_feed(src, limit: int, cache: dict) -> list[Item]:
                 content=_strip_html(body),
                 content_kind="feed",
                 focus=src.focus,
+                images=_extract_images(body),
             )
         )
     return items
 
 
 def load_feed_content(item: Item) -> None:
-    """אם תקציר הפיד קצר מדי — מושך את העמוד עצמו."""
+    """אם תקציר הפיד קצר מדי — מושך את העמוד עצמו.
+
+    פריט קצר אך תקין (ציוץ, למשל) נשאר כמו שהוא ולא נמשך מחדש.
+    """
     if item.has_content or not item.url.startswith("http"):
         return
     try:

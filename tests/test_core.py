@@ -536,3 +536,73 @@ def test_generic_proxy_detected(monkeypatch):
     monkeypatch.setenv("HTTP_PROXY_URL", "http://user:pass@host:8080")
     assert transcript.proxy_is_configured() is True
     assert type(transcript._proxy_config()).__name__ == "GenericProxyConfig"
+
+
+# ------------------------------------------------------------ פריטים קצרים ותמונות
+
+def test_short_item_is_kept_not_dropped():
+    """ציוץ קצר הוא תוכן לגיטימי. הסף הישן של 200 תווים מחק אותו בשקט."""
+    item = _item()
+    item.content = "GM traders. $INIT מעניין לטווח קצר, רמת תמיכה 1.20"
+    assert item.has_content is True
+    assert item.needs_summary is False
+
+
+def test_empty_item_is_dropped():
+    item = _item()
+    item.content = "  "
+    assert item.has_content is False
+
+
+def test_long_item_still_summarised():
+    item = _item()
+    item.content = "מילה " * 300
+    assert item.needs_summary is True
+
+
+def test_images_rewritten_to_twitter_cdn():
+    """מראות Nitter מתחלפות ונופלות — עדיף להצביע על ה-CDN המקורי."""
+    from src.fetchers import _extract_images
+
+    body = '<p>טקסט</p><img src="https://nitter.net/pic/media%2FABC123.jpg" />'
+    assert _extract_images(body) == ["https://pbs.twimg.com/media/ABC123.jpg"]
+
+
+def test_images_deduplicated_and_capped():
+    from src.fetchers import MAX_IMAGES_PER_ITEM, _extract_images
+
+    body = '<img src="https://x/a.jpg">' * 3 + "".join(
+        f'<img src="https://x/{i}.jpg">' for i in range(10)
+    )
+    urls = _extract_images(body)
+    assert len(urls) <= MAX_IMAGES_PER_ITEM
+    assert len(set(urls)) == len(urls)
+
+
+def test_feed_item_carries_images(monkeypatch):
+    feed = """<?xml version="1.0"?><rss version="2.0"><channel><item>
+      <title>ציוץ עם גרף</title><link>https://x.com/u/status/1</link>
+      <pubDate>Tue, 11 Aug 2026 15:42:54 GMT</pubDate>
+      <description>&lt;p&gt;רמות תמיכה&lt;/p&gt;&lt;img src="https://nitter.net/pic/media%2FZZ.jpg"/&gt;</description>
+    </item></channel></rss>"""
+
+    class FakeResponse:
+        content = feed.encode("utf-8")
+
+    monkeypatch.setattr("src.fetchers._get", lambda url, **kw: FakeResponse())
+    item = fetch_feed(Source("twitter", "EliZ", "https://x/rss"), 5, {})[0]
+    assert item.images == ["https://pbs.twimg.com/media/ZZ.jpg"]
+    assert item.published is not None
+
+
+def test_message_does_not_repeat_tweet_text_twice():
+    """בציוץ הכותרת והתוכן זהים — אסור להדפיס פעמיים."""
+    item = _item(title="רמות תמיכה 1.20")
+    msg = build_message([(item, "רמות תמיכה 1.20")], "he", "Asia/Jerusalem")
+    assert msg.count("רמות תמיכה 1.20") == 1
+
+
+def test_message_keeps_distinct_title():
+    item = _item(title="כותרת הסרטון")
+    msg = build_message([(item, "• נקודה אחרת לגמרי")], "he", "Asia/Jerusalem")
+    assert "כותרת הסרטון" in msg and "נקודה אחרת לגמרי" in msg

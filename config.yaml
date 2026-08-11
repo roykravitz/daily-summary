@@ -6,7 +6,7 @@ timezone: Asia/Jerusalem
 
 llm:
   provider: gemini
-  model: "gemini-flash-latest"
+  model: "gemini-flash-lite-latest"
 
 defaults:
   lookback_hours: 24
@@ -33,4 +33,12 @@ topics:
       - type: youtube_channel
         name: "Micha.Stocks"
         url: "https://www.youtube.com/channel/UCSxjNbPriyBh9RNl_QNSAtw"
+        enabled: true
+      - type: twitter
+        name: "EliZ"
+        url: "https://x.com/eliz883"
+        enabled: true
+      - type: youtube_channel
+        name: "רז איטח"
+        url: "https://www.youtube.com/@RazIttah"
         enabled: true
