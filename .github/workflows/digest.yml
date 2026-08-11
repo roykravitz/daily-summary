@@ -58,6 +58,15 @@ jobs:
           fi
           printf '%s\n' "$ENV_FILE" > .env
 
+      # מי שמעדיף לשמור את רשימת המקורות פרטית יכול לשים את תוכן
+      # config.yaml בסוד בשם CONFIG_YAML, ולהוסיף אותו חזרה ל-.gitignore.
+      - name: הגדרות פרטיות
+        if: ${{ secrets.CONFIG_YAML != '' }}
+        env:
+          CONFIG_YAML: ${{ secrets.CONFIG_YAML }}
+        run: |
+          printf '%s\n' "$CONFIG_YAML" > config.yaml
+
       - name: הרצה
         env:
           PYTHONIOENCODING: utf-8
