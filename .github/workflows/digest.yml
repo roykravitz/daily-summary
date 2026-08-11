@@ -83,8 +83,9 @@ jobs:
         if: always()
         run: rm -f .env
 
+      # ריצת יבש לא כותבת state.json, ואז שמירת המטמון נכשלת ברעש מיותר
       - name: שמירת state
-        if: always()
+        if: always() && hashFiles('state.json') != ''
         uses: actions/cache/save@v4
         with:
           path: state.json
