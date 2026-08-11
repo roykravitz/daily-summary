@@ -1,21 +1,17 @@
-# סיכום מידע יומי — דוגמת הגדרות.
-# הדרך הנוחה ליצור את הקובץ הזה היא לפתוח את setup.html ולמלא את הטופס.
-#
-# המבנה מאורגן סביב נושאים. לכל נושא יש מקורות משלו וערוץ טלגרם משלו,
-# כך שכלכלה, ביטחון וספורט מגיעים לשלושה ערוצים נפרדים.
+# סיכום מידע יומי — קובץ הגדרות
+# נוצר מהטופס setup.html. אפשר לערוך ידנית בכל רגע.
 
-language: he                 # he | en | ar | ru
+language: he
 timezone: Asia/Jerusalem
 
 llm:
-  provider: gemini           # gemini | anthropic | openai | claude_cli | mock
+  provider: gemini
   model: "gemini-flash-latest"
 
-# ברירות מחדל לכל הנושאים. כל נושא יכול לדרוס אותן.
 defaults:
-  lookback_hours: 24         # שלח רק תוכן שפורסם ב-X השעות האחרונות
-  max_items_per_source: 2    # מקסימום פריטים חדשים לכל מקור בריצה
-  summary_bullets: 5         # מספר נקודות מבוקש לכל פריט
+  lookback_hours: 24
+  max_items_per_source: 2
+  summary_bullets: 5
 
 schedule:
   times_per_day: 2
@@ -28,7 +24,7 @@ topics:
     focus: "מספרים, רמות מחיר, תחזיות והמלצות"
     targets:
       - type: telegram
-        chat_id_env: TELEGRAM_CHAT_ID_ECONOMY   # שם משתנה הסביבה של הערוץ
+        chat_id_env: TELEGRAM_CHAT_ID_ECONOMY
     sources:
       - type: youtube_channel
         name: "CryptoJungle"
@@ -38,32 +34,3 @@ topics:
         name: "Micha.Stocks"
         url: "https://www.youtube.com/channel/UCSxjNbPriyBh9RNl_QNSAtw"
         enabled: true
-
-  # דוגמה לנושא נוסף — הסר את הסימון והחלף במקורות אמיתיים.
-  # - name: "ביטחון"
-  #   emoji: "🛡️"
-  #   enabled: true
-  #   lookback_hours: 12                        # נושא דחוף יותר, חלון קצר יותר
-  #   focus: "אירועים, החלטות, גורמים מעורבים"
-  #   targets:
-  #     - type: telegram
-  #       chat_id_env: TELEGRAM_CHAT_ID_SECURITY
-  #   sources:
-  #     - type: youtube_channel
-  #       name: "ערוץ לדוגמה"
-  #       url: "https://www.youtube.com/@example"
-  #       enabled: true
-
-# סוגי מקורות אפשריים:
-#   youtube_channel | youtube_playlist | youtube_video | podcast | rss | twitter | web
-#
-# סוגי יעדים אפשריים:
-#   - type: telegram
-#     chat_id_env: TELEGRAM_CHAT_ID_X     # או chat_id ישירות
-#     bot_token_env: TELEGRAM_BOT_TOKEN   # אופציונלי, אם לנושא יש בוט משלו
-#   - type: email
-#     smtp_host: "smtp.gmail.com"
-#     smtp_port: 587
-#     to: "you@gmail.com"
-#   - type: webhook
-#     url: "https://example.com/hook"

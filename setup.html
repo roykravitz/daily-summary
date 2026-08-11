@@ -141,7 +141,7 @@
 <section>
   <h2><span class="num">3</span> תדירות דגימה</h2>
   <p class="hint">כמה פעמים ביום לבדוק אם יש תוכן חדש במקורות.</p>
-  <div class="grid g3">
+  <div class="grid g2">
     <div>
       <label for="perDay">פעמים ביום</label>
       <select id="perDay" onchange="renderTimes()">
@@ -149,13 +149,9 @@
         <option value="2">פעמיים</option>
         <option value="3">3 פעמים</option>
         <option value="4">4 פעמים</option>
-        <option value="6">6 פעמים — כל 4 שעות</option>
-        <option value="12">12 פעמים — כל שעתיים</option>
+        <option value="6">6 פעמים</option>
+        <option value="12">12 פעמים</option>
       </select>
-    </div>
-    <div>
-      <label for="firstHour">שעת ריצה ראשונה</label>
-      <input id="firstHour" type="time" value="08:00" onchange="renderTimes()">
     </div>
     <div>
       <label for="tz">אזור זמן</label>
@@ -167,7 +163,11 @@
       </select>
     </div>
   </div>
-  <p class="note" id="timesPreview"></p>
+  <div style="margin-top:12px">
+    <label>שעות הריצה</label>
+    <div id="timeInputs" style="display:flex; gap:8px; flex-wrap:wrap"></div>
+    <p class="note">אפשר לקבוע כל שעה בנפרד — הן לא חייבות להיות במרווחים שווים.</p>
+  </div>
   <div class="grid g2" style="margin-top:6px">
     <div>
       <label for="lookback">חלון טריות — שלח רק תוכן שפורסם ב־X השעות האחרונות</label>
@@ -220,9 +220,24 @@
 </section>
 
 <div class="bar">
-  <button type="button" class="btn-primary" onclick="build()">צור קבצי הגדרות</button>
-  <button type="button" onclick="downloadAll()">הורד config.yaml + .env</button>
+  <span id="serverButtons" hidden>
+    <button type="button" class="btn-primary" onclick="save()">שמור הגדרות</button>
+    <button type="button" onclick="saveAndRun(true)">שמור והרץ בדיקה</button>
+    <button type="button" onclick="saveAndRun(false)">שמור ושלח עכשיו</button>
+    <button type="button" onclick="installSchedule()">הפעל תזמון אוטומטי</button>
+  </span>
+  <span id="fileButtons">
+    <button type="button" class="btn-primary" onclick="build()">צור קבצי הגדרות</button>
+    <button type="button" onclick="downloadAll()">הורד config.yaml + .env</button>
+  </span>
   <span class="status" id="status"></span>
+</div>
+
+<div id="runBox" hidden>
+  <section>
+    <h2>פלט ההרצה</h2>
+    <pre id="runOut"></pre>
+  </section>
 </div>
 
 <div id="out" hidden>
@@ -428,15 +443,27 @@ function targetsChanged(){
 }
 
 function runTimes(){
-  const n = +val("perDay");
-  const [h, m] = val("firstHour").split(":").map(Number);
-  const step = 24 / n;
-  return Array.from({length:n}, (_, i) =>
-    String((h + Math.round(step*i)) % 24).padStart(2,"0") + ":" + String(m).padStart(2,"0"));
+  return [...el("timeInputs").querySelectorAll("input")].map(i => i.value).filter(Boolean);
 }
 
-function renderTimes(){
-  el("timesPreview").textContent = "שעות ריצה: " + runTimes().join("  ·  ");
+function renderTimes(times){
+  const n = +val("perDay");
+  const box = el("timeInputs");
+  // שומרים על מה שהמשתמש כבר קבע; רק שדות חדשים מקבלים פיזור אחיד
+  const known = times || runTimes();
+  const [bh, bm] = (known[0] || "10:00").split(":").map(Number);
+  const step = 24 / n;
+
+  box.innerHTML = "";
+  for(let i = 0; i < n; i++){
+    const spread = String((bh + Math.round(step*i)) % 24).padStart(2,"0")
+                 + ":" + String(bm).padStart(2,"0");
+    const input = document.createElement("input");
+    input.type = "time";
+    input.value = known[i] || spread;
+    input.style.width = "auto";
+    box.appendChild(input);
+  }
 }
 
 // ---------------------------------------------------------------- פלט
@@ -560,9 +587,137 @@ function copyEl(id){
   el("status").textContent = "הועתק";
 }
 
+// ---------------------------------------------------------------- שרת מקומי
+
+let SERVER = false;
+
+async function api(path, body){
+  const opts = body
+    ? {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)}
+    : {};
+  const res = await fetch(path, opts);
+  if(!res.ok && res.status === 404) throw new Error("no-server");
+  return res.json();
+}
+
+function busy(text){
+  el("status").textContent = text;
+  document.querySelectorAll(".bar button").forEach(b => { b.disabled = true; });
+}
+
+function done(text){
+  el("status").textContent = text;
+  document.querySelectorAll(".bar button").forEach(b => { b.disabled = false; });
+}
+
+async function save(){
+  if(!build()) return;
+  busy("שומר…");
+  try{
+    const r = await api("/api/save", {yaml: buildYaml(), env: buildEnv()});
+    done(r.ok ? r.output : "שגיאה: " + r.output);
+  }catch(e){ done("השמירה נכשלה: " + e.message); }
+}
+
+async function saveAndRun(dry){
+  if(!build()) return;
+  busy("שומר…");
+  try{
+    const saved = await api("/api/save", {yaml: buildYaml(), env: buildEnv()});
+    if(!saved.ok){ done("שגיאה: " + saved.output); return; }
+
+    busy(dry ? "רץ בדיקה — זה לוקח דקה או שתיים…" : "רץ ושולח — זה לוקח דקה או שתיים…");
+    const r = await api("/api/run", {dry});
+    el("runOut").textContent = r.output || "(אין פלט)";
+    el("runBox").hidden = false;
+    el("runBox").scrollIntoView({behavior:"smooth"});
+    done(r.ok ? "ההרצה הסתיימה" : "ההרצה נכשלה — ראה את הפלט");
+  }catch(e){ done("ההרצה נכשלה: " + e.message); }
+}
+
+async function installSchedule(){
+  busy("מתקין תזמון…");
+  try{
+    const r = await api("/api/schedule");
+    el("runOut").textContent = r.output || "(אין פלט)";
+    el("runBox").hidden = false;
+    done(r.ok ? "התזמון הופעל" : "ההתקנה נכשלה — ראה את הפלט");
+  }catch(e){ done("ההתקנה נכשלה: " + e.message); }
+}
+
+// ---------------------------------------------------------------- טעינת הגדרות קיימות
+
+const ENV_BY_PROVIDER = {
+  gemini:"GEMINI_API_KEY", anthropic:"ANTHROPIC_API_KEY", openai:"OPENAI_API_KEY",
+};
+
+function populate(cfg, env){
+  if(cfg.language) el("lang").value = cfg.language;
+  if(cfg.timezone) el("tz").value = cfg.timezone;
+
+  const d = cfg.defaults || {};
+  if(d.lookback_hours) el("lookback").value = d.lookback_hours;
+  if(d.max_items_per_source) el("maxItems").value = d.max_items_per_source;
+  if(d.summary_bullets) el("bullets").value = d.summary_bullets;
+
+  const s = cfg.schedule || {};
+  if(s.run_at && s.run_at.length){
+    el("perDay").value = String(s.times_per_day || s.run_at.length);
+    renderTimes(s.run_at);   // השעות המדויקות מהקובץ, לא פיזור מחושב
+  }
+
+  const llm = cfg.llm || {};
+  if(llm.provider){ el("llmProvider").value = llm.provider; providerChanged(); }
+  if(llm.model) el("llmModel").value = llm.model;
+  const keyName = ENV_BY_PROVIDER[el("llmProvider").value];
+  if(keyName && env[keyName]) el("llmKey").value = env[keyName];
+  if(env.TELEGRAM_BOT_TOKEN) el("tgToken").value = env.TELEGRAM_BOT_TOKEN;
+
+  const topics = cfg.topics || [];
+  if(topics.length){
+    el("topics").innerHTML = "";
+    const kinds = new Set();
+    for(const t of topics){
+      const targets = t.targets || [];
+      targets.forEach(x => kinds.add(x.type));
+      const tg = targets.find(x => x.type === "telegram") || {};
+      const envName = tg.chat_id_env || "";
+      const key = envName.replace(/^TELEGRAM_CHAT_ID_/, "");
+
+      const tid = addTopic({
+        emoji: t.emoji || "", name: t.name || "", key: key.toLowerCase(),
+        focus: t.focus || "",
+        sources: (t.sources || []).map(x => ({
+          type: x.type, name: x.name, url: x.url, focus: x.focus || "",
+        })),
+      });
+      const set = (f, v) => { if(v) document.querySelector(`#${tid} [data-f="${f}"]`).value = v; };
+      set("lookback", t.lookback_hours);
+      set("max", t.max_items_per_source);
+      set("chat", env[envName] || tg.chat_id || "");
+
+      const mail = targets.find(x => x.type === "email");
+      if(mail){
+        if(mail.smtp_host) el("smtpHost").value = mail.smtp_host;
+        if(mail.smtp_port) el("smtpPort").value = mail.smtp_port;
+        if(mail.to) el("mailTo").value = mail.to;
+      }
+      const hook = targets.find(x => x.type === "webhook");
+      if(hook && hook.url) el("hookUrl").value = hook.url;
+    }
+    if(kinds.size){
+      el("tTelegram").checked = kinds.has("telegram");
+      el("tEmail").checked = kinds.has("email");
+      el("tWebhook").checked = kinds.has("webhook");
+    }
+  }
+  if(env.SMTP_USER) el("smtpUser").value = env.SMTP_USER;
+  if(env.SMTP_PASS) el("smtpPass").value = env.SMTP_PASS;
+}
+
 // ---------------------------------------------------------------- התחלה
 
-addTopic({
+const DEFAULT_TOPIC = {
   emoji: "💰", name: "כלכלה", key: "economy",
   focus: "מספרים, רמות מחיר, תחזיות והמלצות",
   sources: [
@@ -571,10 +726,32 @@ addTopic({
     {type:"youtube_channel", name:"Micha.Stocks",
      url:"https://www.youtube.com/channel/UCSxjNbPriyBh9RNl_QNSAtw"},
   ],
-});
-providerChanged();
-targetsChanged();
-renderTimes();
+};
+
+async function init(){
+  addTopic(DEFAULT_TOPIC);
+  providerChanged();
+  targetsChanged();
+  renderTimes();
+
+  try{
+    const state = await api("/api/state");
+    if(!state.server) return;
+    SERVER = true;
+    el("serverButtons").hidden = false;
+    el("fileButtons").hidden = true;
+    if(state.has_config){
+      populate(state.config || {}, state.env || {});
+      el("status").textContent = "נטענו ההגדרות הקיימות";
+    }
+  }catch(e){
+    // נפתח כקובץ רגיל — נשארים במצב הורדה
+  }
+  targetsChanged();
+  renderTimes();
+}
+
+init();
 </script>
 </body>
 </html>
