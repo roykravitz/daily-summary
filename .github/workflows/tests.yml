@@ -1,0 +1,29 @@
+name: בדיקות
+
+# רץ על כל דחיפה ועל כל pull request, כדי שיהיה ברור אם שינוי שבר משהו.
+# לא נדרשים סודות — הבדיקות לא יוצאות לרשת.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - run: pip install -r requirements.txt pytest
+
+      - run: python -m pytest tests -q
+        env:
+          PYTHONIOENCODING: utf-8

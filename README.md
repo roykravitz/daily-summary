@@ -1,0 +1,262 @@
+# סיכום מידע יומי
+
+כלי שרץ אוטומטית, קורא את מקורות המידע שהגדרת — ערוצי יוטיוב, פודקאסטים, פידים, עמודי אינטרנט — ושולח לך סיכום קצר בטלגרם או במייל.
+
+הכלי בנוי סביב **נושאים**. לכל נושא — כלכלה, ביטחון, ספורט, מדע — יש מקורות משלו וערוץ דיווח משלו, כך שכל נושא מגיע לערוץ טלגרם נפרד.
+
+הסיכום מבוסס **אך ורק על מה שנאמר במקורות שהגדרת**. הכלי מתמלל את הסרטון ומסכם את מה שנאמר בו בפועל, לא את הכותרת. אין העשרה ממקורות חיצוניים ואין השלמות מהידע של המודל.
+
+---
+
+## התקנה מהירה
+
+דורש Python 3.10 ומעלה.
+
+```bash
+git clone https://github.com/<שם-המשתמש>/daily-summary.git
+cd daily-summary
+pip install -r requirements.txt
+```
+
+פתח את `setup.html` בדפדפן, מלא את הטופס ולחץ **הורד config.yaml + .env**. שים את `config.yaml` בתיקיית הפרויקט, ושנה את `env.txt` ל-`.env`.
+
+מי שמעדיף לערוך קבצים ידנית במקום את הטופס:
+
+```bash
+cp config.example.yaml config.yaml
+cp .env.example .env
+```
+
+בדיקה שהכל עובד, בלי לשלוח כלום:
+
+```bash
+python -m src.main --dry-run --force
+```
+
+ואז ריצה אמיתית:
+
+```bash
+python -m src.main
+```
+
+---
+
+## הטופס
+
+`setup.html` הוא קובץ מקומי — הוא לא שולח שום דבר לרשת, וכל מה שהוא עושה זה לייצר שני קבצי טקסט. ארבעה חלקים:
+
+**1. נושאים ומקורות מידע** — לכל נושא נותנים שם, אימוג'י, ומזהה לועזי (משמש לשם משתנה הסביבה של הערוץ). בתוך הנושא מוסיפים כמה מקורות שרוצים:
+
+| סוג | מה לשים בשדה הכתובת |
+|---|---|
+| `youtube_channel` | `https://www.youtube.com/@handle` או קישור לערוץ — הכלי מזהה את ה-ID לבד |
+| `youtube_playlist` | קישור לפלייליסט |
+| `youtube_video` | קישור לסרטון בודד |
+| `podcast` / `rss` | כתובת פיד RSS או Atom |
+| `web` | כתובת של עמוד אינטרנט |
+| `twitter` | `https://x.com/username` — ראה את הסייג למטה |
+
+לכל נושא ולכל מקור אפשר למלא **מיקוד**: משפט חופשי שאומר למודל על מה להתמקד, למשל "מספרים, רמות מחיר, תחזיות והמלצות". מיקוד של מקור גובר על זה של הנושא.
+
+**2. מודל שפה** — Gemini, Claude, GPT, או ה-CLI המקומי של Claude Code. ל-Gemini יש שכבה חינמית נדיבה, ולכן הוא ברירת המחדל.
+
+**3. תדירות דגימה** — כמה פעמים ביום לבדוק אם יש תוכן חדש, ומאיזו שעה. אלה ברירות המחדל, וכל נושא יכול לדרוס אותן.
+
+**4. לאן לשלוח** — טלגרם, מייל, webhook. בטלגרם הבוט אחד, וה-Chat ID נקבע לכל נושא בנפרד בכרטיס הנושא.
+
+---
+
+## נושאים
+
+זה הרעיון המרכזי. `config.yaml` נראה כך:
+
+```yaml
+topics:
+  - name: "כלכלה"
+    emoji: "💰"
+    focus: "מספרים, רמות מחיר, תחזיות והמלצות"
+    targets:
+      - type: telegram
+        chat_id_env: TELEGRAM_CHAT_ID_ECONOMY
+    sources:
+      - type: youtube_channel
+        name: "CryptoJungle"
+        url: "https://www.youtube.com/channel/UC..."
+
+  - name: "ביטחון"
+    emoji: "🛡️"
+    lookback_hours: 12          # נושא דחוף יותר — חלון קצר יותר
+    targets:
+      - type: telegram
+        chat_id_env: TELEGRAM_CHAT_ID_SECURITY
+    sources:
+      - type: rss
+        name: "פיד ביטחוני"
+        url: "https://..."
+```
+
+כל נושא נשלח כהודעה נפרדת לערוץ שלו. `chat_id_env` הוא **שם** משתנה הסביבה, והערך עצמו יושב ב-`.env`:
+
+```
+TELEGRAM_BOT_TOKEN=123456:ABC...
+TELEGRAM_CHAT_ID_ECONOMY=555555
+TELEGRAM_CHAT_ID_SECURITY=-1001234567890
+```
+
+כל נושא יכול לדרוס את `lookback_hours`, `max_items_per_source` ו-`summary_bullets` של בלוק `defaults`.
+
+להרצת נושא אחד בלבד:
+
+```bash
+python -m src.main --topic כלכלה
+```
+
+זה גם מאפשר תדירות שונה לכל נושא — פשוט מגדירים שתי משימות מתוזמנות עם `--topic` שונה.
+
+לראות מה מוגדר כרגע:
+
+```bash
+python -m src.main --list
+```
+
+---
+
+## הגדרת טלגרם
+
+1. בטלגרם, פתח שיחה עם `@BotFather` → `/newbot` → תקבל **Bot Token**. בוט אחד מספיק לכל הנושאים.
+2. לכל נושא צריך **Chat ID**:
+   - לצ'אט אישי — `@userinfobot` ייתן לך את המזהה שלך.
+   - לערוץ ייעודי — צור ערוץ, הוסף את הבוט כמנהל, וקח את ה-ID של הערוץ (מתחיל ב-`-100`).
+3. **שלח הודעה אחת לבוט שיצרת.** בלי זה הבוט לא יכול לפתוח איתך שיחה והשליחה תיכשל.
+
+---
+
+## הרצה אוטומטית
+
+### בענן — GitHub Actions
+
+חינמי לחלוטין ל-repository ציבורי, ולא דורש שהמחשב שלך יהיה דלוק.
+
+1. העלה את הפרויקט ל-GitHub. ודא ש-`.env` **לא** נכנס — הוא כבר ב-`.gitignore`.
+2. ב-**Settings → Secrets and variables → Actions** צור סוד אחד בשם **`ENV_FILE`**, והדבק לתוכו את **כל תוכן** קובץ ה-`.env` שלך.
+
+   סוד יחיד ולא אחד לכל מפתח, כי שמות המשתנים משתנים לפי הנושאים שהגדרת. כשמוסיפים נושא — מעדכנים את `ENV_FILE` ומוסיפים לו שורה.
+3. עדכן את שעות ה-cron לפי ההגדרות שלך:
+
+```bash
+python scripts/gen_workflow.py
+```
+
+השעות ב-GitHub Actions הן ב-UTC והסקריפט ממיר אותן מהשעון המקומי. אחרי מעבר שעון קיץ/חורף — הרץ אותו שוב.
+
+הריצות מופיעות בלשונית **Actions**, ואפשר להריץ ידנית עם **Run workflow**.
+
+### מקומית בחלונות
+
+```powershell
+.\scripts\install_task.ps1
+```
+
+רושם משימה ב-Task Scheduler לפי השעות שב-`config.yaml`. להסרה:
+
+```powershell
+Unregister-ScheduledTask -TaskName "סיכום מידע יומי" -Confirm:$false
+```
+
+---
+
+## דגלים
+
+| דגל | מה הוא עושה |
+|---|---|
+| `--list` | מציג את הנושאים, היעדים והמקורות ויוצא |
+| `--topic <שם>` | מריץ נושא אחד בלבד. אפשר לחזור על הדגל לכמה נושאים |
+| `--dry-run` | מדפיס את ההודעות למסך במקום לשלוח, ולא נוגע בקובץ המצב |
+| `--force` | מתעלם מחלון הטריות ומהיסטוריית השליחה — שימושי לבדיקה ראשונה |
+| `--verbose` | לוג מפורט |
+| `--config` | נתיב אחר ל-config.yaml |
+
+לבדיקת המקורות והצנרת בלי לשרוף קריאות ל-API, שנה ב-`config.yaml` ל-`provider: mock` — יוחזרו קטעים מהטקסט המקורי במקום סיכום אמיתי.
+
+---
+
+## איך זה עובד
+
+לכל נושא, בנפרד:
+
+1. **שליפה** — לכל מקור, מושכים את הפריטים האחרונים. ליוטיוב זה דרך פיד ה-RSS הציבורי, בלי מפתח API.
+2. **סינון** — פריט נכנס רק אם פורסם בתוך חלון הטריות ולא נשלח כבר בעבר. `state.json` זוכר מה נשלח, 30 יום אחורה. הזיכרון הוא לפי נושא, כך שאותו סרטון בשני נושאים יישלח לשני הערוצים.
+3. **תוכן** — לסרטוני יוטיוב מושכים תמלול מלא. לפידים ועמודים לוקחים את הטקסט עצמו.
+4. **סיכום** — המודל מקבל את הטקסט עם הנחיה מפורשת לכתוב רק מה שמופיע בו. אם התוכן דל מדי, הוא מחזיר `NO_CONTENT` והפריט מושמט.
+5. **שליחה** — הודעה אחת לנושא, מקובצת לפי מקור, מפוצלת אוטומטית מתחת למגבלת 4096 התווים של טלגרם.
+
+מקור שנופל לא מפיל את הריצה, ונושא שנופל לא מפיל את השאר. אם השליחה של נושא נכשלה, הפריטים שלו **לא** מסומנים כנשלחו, כדי שהריצה הבאה תנסה שוב.
+
+---
+
+## סייגים שכדאי להכיר
+
+**תמלולי יוטיוב מ-GitHub Actions.** יוטיוב חוסם לפעמים בקשות תמלול מכתובות IP של ספקי ענן. הכלי מנסה שתי שיטות עצמאיות, ואם שתיהן נכשלות הוא נופל לתיאור הסרטון. אם זה קורה הרבה, אפשר להוסיף פרוקסי של Webshare דרך `WEBSHARE_PROXY_USERNAME` ו-`WEBSHARE_PROXY_PASSWORD`. בהרצה מקומית מהמחשב הבעיה הזו כמעט לא קיימת.
+
+**סרטונים בלי כתוביות.** אם אין תמלול ואין תיאור מספיק ארוך, הסרטון מושמט. עדיף להשמיט מאשר להמציא.
+
+**טוויטר / X.** אין ל-X פיד ציבורי חינמי. הכלי מנסה מראות Nitter, שנוטות ליפול ולהתחלף. אם המקור הזה קריטי לך, עדיף להזין כתובת פיד יציבה משלך.
+
+**`claude_cli`.** עובד רק בהרצה מקומית, על מחשב שבו Claude Code מותקן ומחובר. הוא לא זמין ב-GitHub Actions — שם צריך מפתח API.
+
+---
+
+## מבנה
+
+```
+setup.html                טופס ההגדרות
+config.yaml               נושאים, מקורות והעדפות (נוצר מהטופס)
+.env                      סודות — לא נכנס לגיט
+src/
+  main.py                 הרצה: לכל נושא — אוסף → מסכם → שולח
+  config.py               טעינת הגדרות ונושאים
+  fetchers.py             שליפה לפי סוג מקור
+  transcript.py           תמלולי יוטיוב, עם נפילה אחורה
+  llm.py                  Gemini / Anthropic / OpenAI / claude CLI / mock
+  compose.py              הרכבת ההודעה ופיצולה
+  deliver.py              טלגרם / מייל / webhook
+  state.py                מה כבר נשלח, לפי נושא
+scripts/
+  gen_workflow.py         מייצר שעות cron ל-GitHub Actions
+  install_task.ps1        רישום משימה מתוזמנת בחלונות
+tests/test_core.py        בדיקות יחידה
+```
+
+---
+
+## בדיקות
+
+```bash
+python -m pytest tests -q
+```
+
+---
+
+## Daily Information Digest — English
+
+A scheduled tool that reads the sources you configure — YouTube channels, podcasts, RSS feeds, web pages — and sends you a short digest on Telegram or by email.
+
+It is organized around **topics**. Each topic (economy, security, sports, science) has its own sources and its own delivery channel, so each one lands in a separate Telegram channel.
+
+Summaries are grounded **strictly in the source material**: YouTube videos are transcribed and summarized from what was actually said, not from the title. No outside enrichment, no model-supplied facts.
+
+Open `setup.html` in a browser, fill in the four sections (topics and sources, LLM provider, sampling frequency, delivery target), and download the generated `config.yaml` and `.env`. Then `pip install -r requirements.txt` and `python -m src.main --dry-run --force` to verify.
+
+Runs free on GitHub Actions — see the *הרצה אוטומטית* section above, or `.github/workflows/digest.yml`.
+
+---
+
+## תרומה
+
+הפרויקט פתוח לשינויים — ראה [CONTRIBUTING.md](CONTRIBUTING.md) להסבר איך מוסיפים סוג מקור, ספק מודל או יעד שליחה.
+
+---
+
+## רישיון
+
+MIT — ראה [LICENSE](LICENSE).

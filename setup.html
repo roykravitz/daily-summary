@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>סיכום מידע יומי — הגדרות</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#fff; --sunk:#f0f2f5; --ink:#14161a; --muted:#6b7280;
+    --line:#e3e6ea; --accent:#2f6feb; --accent-soft:#eaf1ff;
+    --ok:#0f9d58; --warn:#b45309; --radius:12px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#0f1115; --panel:#171a20; --sunk:#12151a; --ink:#e8eaed; --muted:#9aa3af;
+           --line:#2a2f38; --accent:#5b8dff; --accent-soft:#1c2740; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font-family:"Segoe UI",Arial,system-ui,sans-serif;line-height:1.6}
+  .wrap{max-width:960px;margin:0 auto;padding:28px 18px 90px}
+  header{margin-bottom:24px}
+  h1{font-size:28px;margin:0 0 6px}
+  header p{margin:0;color:var(--muted)}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+          padding:20px;margin-bottom:18px}
+  h2{font-size:18px;margin:0 0 4px;display:flex;align-items:center;gap:8px}
+  .num{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;
+       border-radius:50%;background:var(--accent-soft);color:var(--accent);font-size:14px;font-weight:700}
+  .hint{color:var(--muted);font-size:13px;margin:0 0 16px}
+  label{display:block;font-size:13px;font-weight:600;margin-bottom:4px}
+  input,select,textarea{width:100%;padding:9px 11px;border:1px solid var(--line);
+    border-radius:8px;background:var(--bg);color:var(--ink);font:inherit;font-size:14px}
+  .topic input,.topic select{background:var(--panel)}
+  input:focus,select:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:transparent}
+  .grid{display:grid;gap:12px}
+  .g2{grid-template-columns:1fr 1fr}
+  .g3{grid-template-columns:1fr 1fr 1fr}
+  .g-emoji{grid-template-columns:70px 1fr 1fr}
+  @media(max-width:760px){ .g2,.g3,.g-emoji{grid-template-columns:1fr} }
+
+  .topic{border:1px solid var(--line);border-right:4px solid var(--accent);
+         border-radius:10px;padding:16px;margin-bottom:16px;background:var(--sunk)}
+  .topic-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:10px}
+  .topic-name{font-weight:700;font-size:15px}
+  .src{border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:10px;background:var(--panel)}
+  .src-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .src-label{font-size:12px;font-weight:700;color:var(--muted)}
+  .sub{margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)}
+
+  button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid var(--line);
+         background:var(--panel);color:var(--ink);padding:8px 14px}
+  button:hover{border-color:var(--accent)}
+  .btn-primary{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:600;padding:11px 22px}
+  .btn-primary:hover{filter:brightness(1.08)}
+  .btn-sm{padding:4px 10px;font-size:13px}
+  .btn-del{color:#c0392b;border-color:transparent;background:transparent}
+  .row-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+  .check{display:flex;align-items:center;gap:8px;padding:9px 11px;border:1px solid var(--line);
+         border-radius:8px;background:var(--bg);cursor:pointer}
+  .check input{width:auto;margin:0}
+  .check.on{border-color:var(--accent);background:var(--accent-soft)}
+  .targets{display:grid;gap:10px;grid-template-columns:repeat(3,1fr)}
+  @media(max-width:760px){ .targets{grid-template-columns:1fr} }
+  fieldset{border:1px solid var(--line);border-radius:10px;padding:14px;margin:12px 0 0}
+  fieldset[hidden]{display:none}
+  legend{font-size:13px;font-weight:700;padding:0 6px}
+  pre{background:var(--sunk);border:1px solid var(--line);border-radius:8px;padding:14px;
+      overflow-x:auto;font-size:12.5px;direction:ltr;text-align:left;max-height:360px;margin:8px 0 0}
+  .note{font-size:12.5px;color:var(--muted);margin-top:6px}
+  .warn{color:var(--warn);font-size:12.5px}
+  .bar{position:sticky;bottom:0;background:var(--panel);border-top:1px solid var(--line);
+       padding:14px 18px;margin:0 -18px -90px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .status{font-size:13px;color:var(--ok);font-weight:600}
+  code{background:var(--sunk);padding:1px 5px;border-radius:4px;font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>סיכום מידע יומי</h1>
+  <p>כל נושא מקבל את מקורות המידע שלו ואת ערוץ הדיווח שלו. כלכלה, ביטחון וספורט מגיעים לערוצים נפרדים.</p>
+</header>
+
+<!-- 1 -->
+<section>
+  <h2><span class="num">1</span> נושאים ומקורות מידע</h2>
+  <p class="hint">לכל נושא — מקורות משלו וערוץ טלגרם משלו. מקור יכול להיות עמוד אינטרנט, ערוץ או סרטון יוטיוב, טוויטר/X, פודקאסט או פיד RSS. הסיכום יתבסס אך ורק על מה שנאמר במקורות האלה.</p>
+  <div id="topics"></div>
+  <button type="button" onclick="addTopic()">+ הוסף נושא</button>
+</section>
+
+<!-- 2 -->
+<section>
+  <h2><span class="num">2</span> מודל שפה לניתוח</h2>
+  <p class="hint">המודל שיקרא את התוכן ויכתוב את הסיכום. המפתח נשמר בקובץ <code>.env</code> מקומי ולא נכנס לגיט.</p>
+  <div class="grid g2">
+    <div>
+      <label for="llmProvider">ספק</label>
+      <select id="llmProvider" onchange="providerChanged()">
+        <option value="gemini">Google Gemini — יש שכבה חינמית נדיבה</option>
+        <option value="anthropic">Anthropic Claude</option>
+        <option value="openai">OpenAI GPT</option>
+        <option value="claude_cli">Claude Code CLI מקומי — ללא מפתח</option>
+      </select>
+    </div>
+    <div>
+      <label for="llmModel">מודל</label>
+      <input id="llmModel" value="gemini-flash-latest">
+    </div>
+  </div>
+  <div class="grid" style="margin-top:12px" id="keyRow">
+    <div>
+      <label for="llmKey">מפתח API</label>
+      <input id="llmKey" type="password" placeholder="נכתב ל-.env, לא נשמר בדפדפן ולא נשלח לשום מקום">
+      <p class="note" id="keyHelp"></p>
+    </div>
+  </div>
+  <div class="grid g2" style="margin-top:12px">
+    <div>
+      <label for="lang">שפת הסיכום</label>
+      <select id="lang">
+        <option value="he">עברית</option>
+        <option value="en">אנגלית</option>
+        <option value="ar">ערבית</option>
+        <option value="ru">רוסית</option>
+      </select>
+    </div>
+    <div>
+      <label for="bullets">מספר נקודות לכל פריט</label>
+      <select id="bullets">
+        <option value="3">3 — קצר</option>
+        <option value="5" selected>4-6 — רגיל</option>
+        <option value="8">7-9 — מפורט</option>
+      </select>
+    </div>
+  </div>
+</section>
+
+<!-- 3 -->
+<section>
+  <h2><span class="num">3</span> תדירות דגימה</h2>
+  <p class="hint">כמה פעמים ביום לבדוק אם יש תוכן חדש במקורות.</p>
+  <div class="grid g3">
+    <div>
+      <label for="perDay">פעמים ביום</label>
+      <select id="perDay" onchange="renderTimes()">
+        <option value="1" selected>פעם אחת</option>
+        <option value="2">פעמיים</option>
+        <option value="3">3 פעמים</option>
+        <option value="4">4 פעמים</option>
+        <option value="6">6 פעמים — כל 4 שעות</option>
+        <option value="12">12 פעמים — כל שעתיים</option>
+      </select>
+    </div>
+    <div>
+      <label for="firstHour">שעת ריצה ראשונה</label>
+      <input id="firstHour" type="time" value="08:00" onchange="renderTimes()">
+    </div>
+    <div>
+      <label for="tz">אזור זמן</label>
+      <select id="tz">
+        <option value="Asia/Jerusalem" selected>ישראל (Asia/Jerusalem)</option>
+        <option value="Europe/London">לונדון</option>
+        <option value="America/New_York">ניו יורק</option>
+        <option value="UTC">UTC</option>
+      </select>
+    </div>
+  </div>
+  <p class="note" id="timesPreview"></p>
+  <div class="grid g2" style="margin-top:6px">
+    <div>
+      <label for="lookback">חלון טריות — שלח רק תוכן שפורסם ב־X השעות האחרונות</label>
+      <input id="lookback" type="number" min="1" max="336" value="24">
+    </div>
+    <div>
+      <label for="maxItems">מקסימום פריטים חדשים לכל מקור בריצה</label>
+      <input id="maxItems" type="number" min="1" max="10" value="2">
+    </div>
+  </div>
+  <p class="note">אלה ברירות המחדל. אפשר לדרוס אותן לכל נושא בנפרד בתוך כרטיס הנושא.</p>
+</section>
+
+<!-- 4 -->
+<section>
+  <h2><span class="num">4</span> לאן לשלוח</h2>
+  <p class="hint">אפשר לבחור יותר מיעד אחד. בטלגרם — הבוט אחד, וכל נושא נשלח ל-Chat ID אחר שמגדירים בכרטיס הנושא.</p>
+  <div class="targets">
+    <label class="check" id="chk-telegram"><input type="checkbox" id="tTelegram" checked onchange="targetsChanged()"> טלגרם</label>
+    <label class="check" id="chk-email"><input type="checkbox" id="tEmail" onchange="targetsChanged()"> אימייל</label>
+    <label class="check" id="chk-webhook"><input type="checkbox" id="tWebhook" onchange="targetsChanged()"> Webhook</label>
+  </div>
+
+  <fieldset id="fsTelegram">
+    <legend>טלגרם</legend>
+    <label for="tgToken">Bot Token — משותף לכל הנושאים</label>
+    <input id="tgToken" type="password" placeholder="מ-@BotFather">
+    <p class="note">פותחים שיחה עם <code>@BotFather</code> → <code>/newbot</code> → מקבלים טוקן. את ה-Chat ID של כל ערוץ מקבלים מ-<code>@userinfobot</code> (לצ'אט אישי) או מוסיפים את הבוט כמנהל בערוץ. <strong>צריך לשלוח הודעה אחת לבוט</strong> לפני השליחה הראשונה.</p>
+  </fieldset>
+
+  <fieldset id="fsEmail" hidden>
+    <legend>אימייל</legend>
+    <div class="grid g3">
+      <div><label for="smtpHost">שרת SMTP</label><input id="smtpHost" value="smtp.gmail.com"></div>
+      <div><label for="smtpPort">פורט</label><input id="smtpPort" type="number" value="587"></div>
+      <div><label for="smtpUser">שם משתמש</label><input id="smtpUser" placeholder="you@gmail.com"></div>
+    </div>
+    <div class="grid g2" style="margin-top:12px">
+      <div><label for="smtpPass">סיסמה / App Password</label><input id="smtpPass" type="password"></div>
+      <div><label for="mailTo">נמען</label><input id="mailTo" placeholder="you@gmail.com"></div>
+    </div>
+    <p class="note">ב-Gmail צריך App Password ייעודי, לא סיסמת החשבון הרגילה. כל הנושאים נשלחים לאותו נמען, כל נושא כמייל נפרד.</p>
+  </fieldset>
+
+  <fieldset id="fsWebhook" hidden>
+    <legend>Webhook</legend>
+    <label for="hookUrl">כתובת</label>
+    <input id="hookUrl" placeholder="https://... — מקבל POST עם JSON: {text}">
+  </fieldset>
+</section>
+
+<div class="bar">
+  <button type="button" class="btn-primary" onclick="build()">צור קבצי הגדרות</button>
+  <button type="button" onclick="downloadAll()">הורד config.yaml + .env</button>
+  <span class="status" id="status"></span>
+</div>
+
+<div id="out" hidden>
+  <section>
+    <h2>config.yaml</h2>
+    <p class="hint">שמור בשם <code>config.yaml</code> בתיקיית הפרויקט. מותר להעלות לגיט — אין בו סודות.</p>
+    <pre id="outYaml"></pre>
+    <div class="row-actions"><button type="button" class="btn-sm" onclick="copyEl('outYaml')">העתק</button></div>
+  </section>
+  <section>
+    <h2>.env</h2>
+    <p class="hint warn">מכיל סודות. שמור בשם <code>.env</code> בתיקיית הפרויקט — הוא כבר ב-.gitignore. אל תעלה אותו לגיטהאב.</p>
+    <pre id="outEnv"></pre>
+    <div class="row-actions"><button type="button" class="btn-sm" onclick="copyEl('outEnv')">העתק</button></div>
+  </section>
+</div>
+
+</div>
+
+<script>
+const SOURCE_TYPES = [
+  ["youtube_channel", "ערוץ יוטיוב", "https://www.youtube.com/@handle  או  קישור לערוץ"],
+  ["youtube_video",   "סרטון יוטיוב בודד", "https://www.youtube.com/watch?v=..."],
+  ["youtube_playlist","פלייליסט יוטיוב", "https://www.youtube.com/playlist?list=..."],
+  ["podcast",         "פודקאסט (RSS)", "https://.../feed.xml"],
+  ["rss",             "פיד RSS / אתר חדשות", "https://.../rss"],
+  ["twitter",         "טוויטר / X", "https://x.com/username"],
+  ["web",             "עמוד אינטרנט", "https://example.com/page"],
+];
+
+let seq = 0;
+const el = id => document.getElementById(id);
+const val = id => el(id).value.trim();
+
+// ---------------------------------------------------------------- נושאים
+
+function addTopic(preset){
+  preset = preset || {};
+  const tid = "t" + (seq++);
+  const div = document.createElement("div");
+  div.className = "topic";
+  div.id = tid;
+  div.innerHTML = `
+    <div class="topic-head">
+      <span class="topic-name">נושא</span>
+      <button type="button" class="btn-sm btn-del" onclick="document.getElementById('${tid}').remove()">הסר נושא</button>
+    </div>
+    <div class="grid g-emoji">
+      <div>
+        <label>אימוג'י</label>
+        <input data-f="emoji" maxlength="4" placeholder="💰">
+      </div>
+      <div>
+        <label>שם הנושא</label>
+        <input data-f="name" placeholder="כלכלה">
+      </div>
+      <div>
+        <label>מזהה לועזי</label>
+        <input data-f="key" placeholder="economy">
+        <p class="note">לשם משתנה הסביבה של הערוץ</p>
+      </div>
+    </div>
+    <div style="margin-top:12px">
+      <label>מיקוד — על מה להתמקד בכל המקורות של הנושא</label>
+      <input data-f="focus" placeholder="למשל: מספרים, רמות מחיר, תחזיות והמלצות">
+    </div>
+    <div class="grid g3" style="margin-top:12px">
+      <div data-tg>
+        <label>Telegram Chat ID של הנושא</label>
+        <input data-f="chat" placeholder="הערוץ שאליו יישלח הנושא הזה">
+      </div>
+      <div>
+        <label>חלון טריות (שעות)</label>
+        <input data-f="lookback" type="number" min="1" max="336" placeholder="ברירת מחדל">
+      </div>
+      <div>
+        <label>פריטים למקור</label>
+        <input data-f="max" type="number" min="1" max="10" placeholder="ברירת מחדל">
+      </div>
+    </div>
+    <div class="sub">
+      <label>מקורות המידע של הנושא</label>
+      <div data-sources></div>
+      <button type="button" class="btn-sm" onclick="addSource('${tid}')">+ הוסף מקור</button>
+    </div>`;
+  el("topics").appendChild(div);
+
+  const nameIn = div.querySelector('[data-f="name"]');
+  const keyIn  = div.querySelector('[data-f="key"]');
+  nameIn.addEventListener("input", () => {
+    div.querySelector(".topic-name").textContent = nameIn.value.trim() || "נושא";
+  });
+
+  if(preset.emoji) div.querySelector('[data-f="emoji"]').value = preset.emoji;
+  if(preset.name){ nameIn.value = preset.name; div.querySelector(".topic-name").textContent = preset.name; }
+  if(preset.key)  keyIn.value = preset.key;
+  if(preset.focus) div.querySelector('[data-f="focus"]').value = preset.focus;
+  for(const s of preset.sources || []) addSource(tid, s);
+
+  syncTelegramFields();
+  return tid;
+}
+
+function addSource(topicId, preset){
+  preset = preset || {};
+  const sid = "s" + (seq++);
+  const div = document.createElement("div");
+  div.className = "src";
+  div.id = sid;
+  div.innerHTML = `
+    <div class="src-head">
+      <span class="src-label">מקור</span>
+      <button type="button" class="btn-sm btn-del" onclick="document.getElementById('${sid}').remove()">הסר</button>
+    </div>
+    <div class="grid g2">
+      <div>
+        <label>סוג</label>
+        <select data-f="type">${SOURCE_TYPES.map(t=>`<option value="${t[0]}">${t[1]}</option>`).join("")}</select>
+      </div>
+      <div>
+        <label>שם תצוגה</label>
+        <input data-f="name" placeholder="איך זה ייקרא בהודעה">
+      </div>
+    </div>
+    <div style="margin-top:10px">
+      <label>כתובת</label>
+      <input data-f="url">
+    </div>
+    <div style="margin-top:10px">
+      <label>מיקוד ספציפי למקור הזה (אופציונלי)</label>
+      <input data-f="focus" placeholder="אם ריק — ישתמש במיקוד של הנושא">
+    </div>`;
+  document.querySelector(`#${topicId} [data-sources]`).appendChild(div);
+
+  const typeSel = div.querySelector('[data-f="type"]');
+  const urlIn   = div.querySelector('[data-f="url"]');
+  const sync = () => {
+    const t = SOURCE_TYPES.find(x => x[0] === typeSel.value);
+    urlIn.placeholder = t ? t[2] : "";
+  };
+  typeSel.addEventListener("change", sync);
+
+  if(preset.type) typeSel.value = preset.type;
+  if(preset.name) div.querySelector('[data-f="name"]').value = preset.name;
+  if(preset.url)  urlIn.value = preset.url;
+  if(preset.focus) div.querySelector('[data-f="focus"]').value = preset.focus;
+  sync();
+}
+
+function readTopics(){
+  return [...document.querySelectorAll("#topics .topic")].map((d, i) => {
+    const get = f => {
+      const node = d.querySelector(`:scope > [data-f="${f}"], :scope [data-f="${f}"]`);
+      return node ? node.value.trim() : "";
+    };
+    const sources = [...d.querySelectorAll("[data-sources] .src")].map(s => {
+      const sg = f => s.querySelector(`[data-f="${f}"]`).value.trim();
+      return { type: sg("type"), name: sg("name"), url: sg("url"), focus: sg("focus") };
+    }).filter(s => s.url);
+
+    const name = get("name") || `נושא ${i + 1}`;
+    const key = (get("key") || `topic${i + 1}`).toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+    return {
+      name, key, emoji: get("emoji"), focus: get("focus"),
+      chat: get("chat"), lookback: get("lookback"), max: get("max"), sources,
+    };
+  }).filter(t => t.sources.length);
+}
+
+function syncTelegramFields(){
+  const on = el("tTelegram").checked;
+  document.querySelectorAll("#topics [data-tg]").forEach(n => { n.style.display = on ? "" : "none"; });
+}
+
+// ---------------------------------------------------------------- מודל ויעדים
+
+const KEY_HELP = {
+  gemini:    "מפתח חינמי: aistudio.google.com/apikey",
+  anthropic: "console.anthropic.com — לפי שימוש",
+  openai:    "platform.openai.com/api-keys — לפי שימוש",
+  claude_cli:"לא נדרש מפתח. משתמש ב-claude CLI המותקן במחשב — עובד רק בהרצה מקומית, לא ב-GitHub Actions.",
+};
+const DEFAULT_MODEL = {
+  gemini:"gemini-flash-latest", anthropic:"claude-sonnet-5",
+  openai:"gpt-4o-mini", claude_cli:"",
+};
+
+function providerChanged(){
+  const p = val("llmProvider");
+  el("llmModel").value = DEFAULT_MODEL[p];
+  el("keyHelp").textContent = KEY_HELP[p];
+  el("keyRow").hidden = (p === "claude_cli");
+}
+
+function targetsChanged(){
+  const map = {tTelegram:"fsTelegram", tEmail:"fsEmail", tWebhook:"fsWebhook"};
+  for(const [cb, fs] of Object.entries(map)){
+    const on = el(cb).checked;
+    el(fs).hidden = !on;
+    el(cb).closest(".check").classList.toggle("on", on);
+  }
+  syncTelegramFields();
+}
+
+function runTimes(){
+  const n = +val("perDay");
+  const [h, m] = val("firstHour").split(":").map(Number);
+  const step = 24 / n;
+  return Array.from({length:n}, (_, i) =>
+    String((h + Math.round(step*i)) % 24).padStart(2,"0") + ":" + String(m).padStart(2,"0"));
+}
+
+function renderTimes(){
+  el("timesPreview").textContent = "שעות ריצה: " + runTimes().join("  ·  ");
+}
+
+// ---------------------------------------------------------------- פלט
+
+function q(s){ return '"' + String(s).replace(/\\/g,"\\\\").replace(/"/g,'\\"') + '"'; }
+
+function buildYaml(){
+  const topics = readTopics();
+  const L = [];
+  L.push("# סיכום מידע יומי — קובץ הגדרות");
+  L.push("# נוצר מהטופס setup.html. אפשר לערוך ידנית בכל רגע.");
+  L.push("");
+  L.push("language: " + val("lang"));
+  L.push("timezone: " + val("tz"));
+  L.push("");
+  L.push("llm:");
+  L.push("  provider: " + val("llmProvider"));
+  if(val("llmModel")) L.push("  model: " + q(val("llmModel")));
+  L.push("");
+  L.push("defaults:");
+  L.push("  lookback_hours: " + (+val("lookback")));
+  L.push("  max_items_per_source: " + (+val("maxItems")));
+  L.push("  summary_bullets: " + (+val("bullets")));
+  L.push("");
+  L.push("schedule:");
+  L.push("  times_per_day: " + (+val("perDay")));
+  L.push("  run_at: [" + runTimes().map(q).join(", ") + "]");
+  L.push("");
+  L.push("topics:");
+  if(!topics.length) L.push("  []  # לא הוגדרו נושאים עם מקורות");
+
+  for(const t of topics){
+    L.push("  - name: " + q(t.name));
+    if(t.emoji) L.push("    emoji: " + q(t.emoji));
+    L.push("    enabled: true");
+    if(t.focus)    L.push("    focus: " + q(t.focus));
+    if(t.lookback) L.push("    lookback_hours: " + (+t.lookback));
+    if(t.max)      L.push("    max_items_per_source: " + (+t.max));
+
+    L.push("    targets:");
+    if(el("tTelegram").checked){
+      L.push("      - type: telegram");
+      L.push("        chat_id_env: TELEGRAM_CHAT_ID_" + t.key);
+    }
+    if(el("tEmail").checked){
+      L.push("      - type: email");
+      L.push("        smtp_host: " + q(val("smtpHost")));
+      L.push("        smtp_port: " + (+val("smtpPort")));
+      L.push("        to: " + q(val("mailTo")));
+    }
+    if(el("tWebhook").checked){
+      L.push("      - type: webhook");
+      L.push("        url: " + q(val("hookUrl")));
+    }
+
+    L.push("    sources:");
+    for(const s of t.sources){
+      L.push("      - type: " + s.type);
+      L.push("        name: " + q(s.name || s.url));
+      L.push("        url: " + q(s.url));
+      if(s.focus) L.push("        focus: " + q(s.focus));
+      L.push("        enabled: true");
+    }
+    L.push("");
+  }
+  return L.join("\n");
+}
+
+function buildEnv(){
+  const L = ["# סודות — אל תעלה את הקובץ הזה לגיטהאב", ""];
+  const p = val("llmProvider");
+  const envName = {gemini:"GEMINI_API_KEY", anthropic:"ANTHROPIC_API_KEY", openai:"OPENAI_API_KEY"}[p];
+  if(envName) L.push(envName + "=" + (val("llmKey") || "<המפתח שלך כאן>"));
+
+  if(el("tTelegram").checked){
+    L.push("");
+    L.push("TELEGRAM_BOT_TOKEN=" + (val("tgToken") || "<טוקן מ-BotFather>"));
+    L.push("# Chat ID לכל נושא:");
+    for(const t of readTopics()){
+      L.push("TELEGRAM_CHAT_ID_" + t.key + "=" + (t.chat || "<chat id של " + t.name + ">"));
+    }
+  }
+  if(el("tEmail").checked){
+    L.push("");
+    L.push("SMTP_USER=" + (val("smtpUser") || "<user>"));
+    L.push("SMTP_PASS=" + (val("smtpPass") || "<app password>"));
+  }
+  L.push("");
+  return L.join("\n");
+}
+
+function build(){
+  const topics = readTopics();
+  if(!topics.length){ alert("צריך לפחות נושא אחד עם מקור מידע אחד שיש לו כתובת."); return false; }
+  el("outYaml").textContent = buildYaml();
+  el("outEnv").textContent  = buildEnv();
+  el("out").hidden = false;
+  const count = topics.reduce((n, t) => n + t.sources.length, 0);
+  el("status").textContent = `נוצר · ${topics.length} נושאים, ${count} מקורות`;
+  el("out").scrollIntoView({behavior:"smooth"});
+  return true;
+}
+
+function download(name, text){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], {type:"text/plain;charset=utf-8"}));
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function downloadAll(){
+  if(!build()) return;
+  download("config.yaml", buildYaml());
+  setTimeout(() => download("env.txt", buildEnv()), 350);
+  el("status").textContent = "ירד. שנה את env.txt ל-.env";
+}
+
+function copyEl(id){
+  navigator.clipboard.writeText(el(id).textContent);
+  el("status").textContent = "הועתק";
+}
+
+// ---------------------------------------------------------------- התחלה
+
+addTopic({
+  emoji: "💰", name: "כלכלה", key: "economy",
+  focus: "מספרים, רמות מחיר, תחזיות והמלצות",
+  sources: [
+    {type:"youtube_channel", name:"CryptoJungle",
+     url:"https://www.youtube.com/channel/UCOCtavh3cnxvjv1XZCvBGdg"},
+    {type:"youtube_channel", name:"Micha.Stocks",
+     url:"https://www.youtube.com/channel/UCSxjNbPriyBh9RNl_QNSAtw"},
+  ],
+});
+providerChanged();
+targetsChanged();
+renderTimes();
+</script>
+</body>
+</html>
