@@ -1,6 +1,7 @@
 """שליחת ההודעה ליעדים — טלגרם, אימייל, webhook."""
 from __future__ import annotations
 
+import json
 import logging
 import os
 import smtplib
@@ -14,21 +15,45 @@ from .compose import split_message
 log = logging.getLogger(__name__)
 
 TIMEOUT = 30
+CAPTION_LIMIT = 1000
+MAX_IMAGES_PER_MESSAGE = 10
 
 
-def send_telegram(text: str, target: dict) -> bool:
-    # לכל נושא אפשר ערוץ משלו: chat_id ישירות, או שם משתנה סביבה ב-chat_id_env
+def _telegram_creds(target: dict) -> tuple[str, str]:
     token = os.getenv(target.get("bot_token_env") or "TELEGRAM_BOT_TOKEN")
     chat_id = str(target.get("chat_id") or "") or os.getenv(
         target.get("chat_id_env") or "TELEGRAM_CHAT_ID", ""
     )
-    if not token:
-        log.error("חסר טוקן טלגרם (%s)", target.get("bot_token_env") or "TELEGRAM_BOT_TOKEN")
-        return False
-    if not chat_id:
-        log.error("חסר chat id לטלגרם (%s)", target.get("chat_id_env") or "TELEGRAM_CHAT_ID")
-        return False
+    return token or "", chat_id
 
+
+def _send_photo_block(block: dict, token: str, chat_id: str) -> bool:
+    """שולח תמונה אחת או אלבום, כשהטקסט של הפריט הוא הכיתוב."""
+    images = block["images"][:MAX_IMAGES_PER_MESSAGE]
+    caption = block["caption"][:CAPTION_LIMIT]
+
+    if len(images) == 1:
+        url = f"https://api.telegram.org/bot{token}/sendPhoto"
+        payload = {"chat_id": chat_id, "photo": images[0], "caption": caption}
+    else:
+        url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
+        media = [{"type": "photo", "media": u} for u in images]
+        media[0]["caption"] = caption
+        payload = {"chat_id": chat_id, "media": json.dumps(media)}
+
+    try:
+        resp = requests.post(url, data=payload, timeout=TIMEOUT)
+        if resp.ok:
+            return True
+        log.warning("שליחת תמונה נכשלה (%s): %s", resp.status_code, resp.text[:200])
+    except requests.RequestException as exc:
+        log.warning("שליחת תמונה נכשלה: %s", exc)
+
+    # התמונה לא עברה — לפחות שהטקסט יגיע
+    return _send_text(caption, token, chat_id, {})
+
+
+def _send_text(text: str, token: str, chat_id: str, target: dict) -> bool:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     ok = True
     for chunk in split_message(text):
@@ -59,54 +84,37 @@ def send_telegram(text: str, target: dict) -> bool:
                 time.sleep(3)
         else:
             ok = False
-        time.sleep(0.5)
+        time.sleep(0.4)
     return ok
 
 
-MAX_PHOTOS_PER_RUN = 10
-CAPTION_LIMIT = 1000
+def send_telegram_blocks(blocks: list[dict], target: dict) -> bool:
+    """שולח את הבלוקים לפי הסדר, כך שכל תמונה מגיעה עם הטקסט שלה."""
+    token, chat_id = _telegram_creds(target)
+    if not token:
+        log.error("חסר טוקן טלגרם (%s)", target.get("bot_token_env") or "TELEGRAM_BOT_TOKEN")
+        return False
+    if not chat_id:
+        log.error("חסר chat id לטלגרם (%s)", target.get("chat_id_env") or "TELEGRAM_CHAT_ID")
+        return False
+
+    ok = True
+    for block in blocks:
+        if block["type"] == "photo":
+            ok = _send_photo_block(block, token, chat_id) and ok
+        else:
+            ok = _send_text(block["text"], token, chat_id, target) and ok
+        time.sleep(0.4)
+    return ok
 
 
-def send_telegram_photos(items: list, target: dict, tz: str = "Asia/Jerusalem",
-                         language: str = "he") -> int:
-    """שולח תמונות שנמצאו בפריטים, אחרי הודעת הטקסט.
-
-    טלגרם מוריד את התמונה בעצמו מהכתובת, ולכן אין כאן העלאה ואין עלות.
-    מחזיר כמה נשלחו.
-    """
-    from .compose import source_header
-
-    token = os.getenv(target.get("bot_token_env") or "TELEGRAM_BOT_TOKEN")
-    chat_id = str(target.get("chat_id") or "") or os.getenv(
-        target.get("chat_id_env") or "TELEGRAM_CHAT_ID", ""
-    )
+def send_telegram(text: str, target: dict) -> bool:
+    """שליחת טקסט בלבד — נשמר עבור קוראים שאין להם בלוקים."""
+    token, chat_id = _telegram_creds(target)
     if not (token and chat_id):
-        return 0
-
-    url = f"https://api.telegram.org/bot{token}/sendPhoto"
-    sent = 0
-    for item in items:
-        for photo in item.images:
-            if sent >= MAX_PHOTOS_PER_RUN:
-                log.info("הגעתי למגבלת %d תמונות בריצה", MAX_PHOTOS_PER_RUN)
-                return sent
-            caption = f"{source_header(item, tz, language)}\n{item.url}"
-            try:
-                resp = requests.post(
-                    url,
-                    data={"chat_id": chat_id, "photo": photo,
-                          "caption": caption[:CAPTION_LIMIT]},
-                    timeout=TIMEOUT,
-                )
-                if resp.ok:
-                    sent += 1
-                else:
-                    log.warning("שליחת תמונה נכשלה (%s): %s", resp.status_code,
-                                resp.text[:150])
-            except requests.RequestException as exc:
-                log.warning("שליחת תמונה נכשלה: %s", exc)
-            time.sleep(0.5)
-    return sent
+        log.error("חסרים פרטי טלגרם")
+        return False
+    return _send_text(text, token, chat_id, target)
 
 
 def send_email(text: str, target: dict) -> bool:
@@ -151,18 +159,29 @@ def send_webhook(text: str, target: dict) -> bool:
     return False
 
 
-SENDERS = {"telegram": send_telegram, "email": send_email, "webhook": send_webhook}
+def deliver(blocks: list[dict], targets: list[dict], language: str = "he") -> bool:
+    """שולח לכל היעדים. מחזיר True אם לפחות אחד הצליח.
 
+    טלגרם מקבל את הבלוקים לפי סדרם, כדי שתמונה תגיע עם הטקסט שלה.
+    אימייל ו-webhook מקבלים גרסת טקסט אחת.
+    """
+    text = "\n\n".join(
+        b["text"] if b["type"] == "text" else b["caption"] for b in blocks
+    ).strip()
 
-def deliver(text: str, targets: list[dict]) -> bool:
-    """שולח לכל היעדים. מחזיר True אם לפחות אחד הצליח."""
     any_ok = False
     for target in targets:
-        sender = SENDERS.get(target.get("type", ""))
-        if not sender:
-            log.warning("סוג יעד לא מוכר: %s", target.get("type"))
+        kind = target.get("type", "")
+        if kind == "telegram":
+            ok = send_telegram_blocks(blocks, target)
+        elif kind == "email":
+            ok = send_email(text, target)
+        elif kind == "webhook":
+            ok = send_webhook(text, target)
+        else:
+            log.warning("סוג יעד לא מוכר: %s", kind)
             continue
-        if sender(text, target):
-            log.info("נשלח ל-%s", target["type"])
+        if ok:
+            log.info("נשלח ל-%s", kind)
             any_ok = True
     return any_ok

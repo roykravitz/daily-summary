@@ -106,24 +106,54 @@ def source_header(item, tz: str, language: str = "he") -> str:
     return f"{header} · {published}" if published else header
 
 
-def build_message(summaries: list[tuple], language: str, tz: str) -> str:
-    """summaries: רשימת (Item, טקסט סיכום). מחזיר טקסט רגיל להודעה.
+def _entry(item, summary: str, tz: str, language: str) -> str:
+    lines = [source_header(item, tz, language)]
+    if not _title_repeats(item.title, summary):
+        lines.append(item.title)
+    lines.append(summary)
+    lines.append(item.url)
+    return "\n".join(lines)
 
-    אין כותרת עליונה: כל נושא נשלח לערוץ משלו, ושם הנושא היה חוזר על עצמו.
+
+def _by_time(pair):
+    """החדש קודם. פריט בלי תאריך יורד לסוף."""
+    published = pair[0].published
+    return published or datetime.min.replace(tzinfo=timezone.utc)
+
+
+def build_blocks(summaries: list[tuple], language: str, tz: str) -> list[dict]:
+    """מפרק את העדכון לבלוקים לפי סדר הזמן.
+
+    פריט עם תמונה נשלח כתמונה שהטקסט שלו הוא הכיתוב, כדי שהגרף והניתוח
+    שנכתב עליו יגיעו יחד — כמו שהם מופיעים במקור.
     """
     if not summaries:
-        return EMPTY.get(language, EMPTY["en"])
+        return [{"type": "text", "text": EMPTY.get(language, EMPTY["en"])}]
 
-    lines = []
-    for item, summary in summaries:
-        lines.append(source_header(item, tz, language))
-        if not _title_repeats(item.title, summary):
-            lines.append(item.title)
-        lines.append(summary)
-        lines.append(item.url)
-        lines.append("")
+    blocks: list[dict] = []
+    buffer: list[str] = []
 
-    return "\n".join(lines).strip()
+    def flush():
+        if buffer:
+            blocks.append({"type": "text", "text": "\n\n".join(buffer)})
+            buffer.clear()
+
+    for item, summary in sorted(summaries, key=_by_time, reverse=True):
+        entry = _entry(item, summary, tz, language)
+        if item.images:
+            flush()
+            blocks.append({"type": "photo", "images": item.images, "caption": entry})
+        else:
+            buffer.append(entry)
+    flush()
+    return blocks
+
+
+def build_message(summaries: list[tuple], language: str, tz: str) -> str:
+    """גרסת טקסט אחת של כל העדכון — לאימייל, ל-webhook ולריצת יבש."""
+    blocks = build_blocks(summaries, language, tz)
+    parts = [b["text"] if b["type"] == "text" else b["caption"] for b in blocks]
+    return "\n\n".join(p for p in parts if p).strip()
 
 
 def _title_repeats(title: str, summary: str) -> bool:

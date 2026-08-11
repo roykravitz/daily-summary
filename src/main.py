@@ -14,11 +14,11 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .compose import build_message
+from .compose import build_blocks, build_message
 from .config import ROOT, Config, Topic, load_config, load_env
-from .deliver import deliver, send_telegram_photos
+from .deliver import deliver
 from .fetchers import fetch_source, load_content
-from .llm import summarize
+from .llm import needs_translation, summarize, translate
 from .state import State
 
 log = logging.getLogger("digest")
@@ -76,8 +76,13 @@ def collect_topic(topic: Topic, cfg: Config, state: State, force: bool) -> list[
 
             if not item.needs_summary:
                 # קצר מכדי לסכם. מציגים כלשונו — נאמן יותר, ולא עולה מהמכסה.
-                log.info("      קצר (%d תווים) — מוצג כלשונו", len(item.content))
-                results.append((item, item.content.strip()))
+                text = item.content.strip()
+                if needs_translation(text, cfg.language):
+                    log.info("      קצר (%d תווים) בשפה זרה — מתרגם", len(text))
+                    text = translate(text, cfg.language, cfg.llm_provider, cfg.llm_model) or text
+                else:
+                    log.info("      קצר (%d תווים) — מוצג כלשונו", len(text))
+                results.append((item, text))
                 continue
 
             # מיקוד ברמת הנושא משמש כברירת מחדל למקורות שלא הגדירו משלהם
@@ -153,27 +158,19 @@ def main() -> int:
             log.info("  אין תוכן חדש — לא נשלחת הודעה לנושא הזה")
             continue
 
-        message = build_message(summaries, cfg.language, cfg.timezone)
+        blocks = build_blocks(summaries, cfg.language, cfg.timezone)
 
         if args.dry_run:
             print("\n" + "=" * 60)
-            print(message)
+            print(build_message(summaries, cfg.language, cfg.timezone))
             print("=" * 60)
             sent_any = True
             continue
 
-        if not deliver(message, topic.targets):
+        if not deliver(blocks, topic.targets, cfg.language):
             log.error("  שליחה נכשלה לנושא %s — יישלח שוב בריצה הבאה", topic.name)
             failed_any = True
             continue
-
-        with_images = [item for item, _ in summaries if item.images]
-        if with_images:
-            for target in topic.targets:
-                if target.get("type") == "telegram":
-                    count = send_telegram_photos(with_images, target, cfg.timezone, cfg.language)
-                    if count:
-                        log.info("  נשלחו %d תמונות", count)
 
         for item, _ in summaries:
             state.mark_sent(item.state_key)

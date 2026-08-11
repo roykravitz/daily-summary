@@ -606,3 +606,76 @@ def test_message_keeps_distinct_title():
     item = _item(title="כותרת הסרטון")
     msg = build_message([(item, "• נקודה אחרת לגמרי")], "he", "Asia/Jerusalem")
     assert "כותרת הסרטון" in msg and "נקודה אחרת לגמרי" in msg
+
+
+# ------------------------------------------------------------ סדר, בלוקים ותרגום
+
+def _timed(name, minutes_ago, images=None):
+    item = _item(name)
+    item.published = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+    item.images = images or []
+    return item
+
+
+def test_items_sorted_newest_first_across_sources():
+    """הסדר צריך להיות ציר זמן אחד, לא ערבוב לפי סדר המקורות בקובץ."""
+    from src.compose import build_blocks
+
+    pairs = [(_timed("ישן", 600), "א"), (_timed("חדש", 5), "ב"), (_timed("אמצע", 120), "ג")]
+    text = build_message(pairs, "he", "Asia/Jerusalem")
+    assert text.index("חדש") < text.index("אמצע") < text.index("ישן")
+    assert len(build_blocks(pairs, "he", "Asia/Jerusalem")) == 1
+
+
+def test_item_without_date_sinks_to_the_end():
+    item = _item("בלי תאריך")
+    item.published = None
+    pairs = [(item, "א"), (_timed("עם תאריך", 300), "ב")]
+    text = build_message(pairs, "he", "Asia/Jerusalem")
+    assert text.index("עם תאריך") < text.index("בלי תאריך")
+
+
+def test_image_becomes_its_own_block_with_the_text_as_caption():
+    """הגרף והניתוח שנכתב עליו חייבים להגיע יחד, כמו במקור."""
+    from src.compose import build_blocks
+
+    pairs = [
+        (_timed("בלי", 10), "טקסט רגיל"),
+        (_timed("עם גרף", 5, ["https://pbs.twimg.com/media/A.jpg"]), "רמת תמיכה 63,800"),
+    ]
+    blocks = build_blocks(pairs, "he", "Asia/Jerusalem")
+
+    assert [b["type"] for b in blocks] == ["photo", "text"]   # הפריט עם הגרף חדש יותר
+    photo = blocks[0]
+    assert photo["images"] == ["https://pbs.twimg.com/media/A.jpg"]
+    assert "רמת תמיכה 63,800" in photo["caption"]
+    assert "עם גרף" in photo["caption"]
+
+
+def test_text_version_keeps_every_item():
+    """אימייל ו-webhook מקבלים טקסט אחד — אסור שפריט עם תמונה ייעלם."""
+    pairs = [(_timed("א", 10), "ראשון"),
+             (_timed("ב", 5, ["https://x/1.jpg"]), "שני")]
+    text = build_message(pairs, "he", "Asia/Jerusalem")
+    assert "ראשון" in text and "שני" in text
+
+
+@pytest.mark.parametrize("text,language,expected", [
+    ("After Monday close 2 trigger in play, now time to sleep", "he", True),
+    ("הנפט מזנק והשוק נבלם היום בבורסה בתל אביב", "he", False),
+    ("GM 👋", "he", False),
+    ("הנפט מזנק והשוק נבלם", "en", True),
+])
+def test_translation_detection(text, language, expected):
+    from src.llm import needs_translation
+
+    assert needs_translation(text, language) is expected
+
+
+def test_translation_prompt_forbids_summarising():
+    from src.llm import build_translation_prompt
+
+    prompt = build_translation_prompt("$BTC support at 63,800", "he")
+    assert "$BTC support at 63,800" in prompt
+    assert "אל תקצר" in prompt
+    assert "עברית" in prompt

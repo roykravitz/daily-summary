@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -270,6 +271,60 @@ def build_prompt(item, language: str, bullets: int) -> str:
 --- הטקסט ---
 {item.content[:MAX_CHARS]}
 --- סוף הטקסט ---"""
+
+
+# טווחי הכתב של כל שפה — לזיהוי טקסט שצריך תרגום
+SCRIPTS = {
+    "he": r"֐-׿",
+    "ar": r"؀-ۿ",
+    "ru": r"Ѐ-ӿ",
+    "en": r"A-Za-z",
+}
+
+
+def needs_translation(text: str, language: str) -> bool:
+    """האם הטקסט כתוב בשפה אחרת מזו שביקשנו."""
+    pattern = SCRIPTS.get(language)
+    if not pattern:
+        return False
+    letters = re.findall(r"[^\W\d_]", text, re.UNICODE)
+    if len(letters) < 15:
+        return False
+    native = re.findall(f"[{pattern}]", text)
+    return len(native) / len(letters) < 0.15
+
+
+def build_translation_prompt(text: str, language: str) -> str:
+    lang_name = LANG_NAMES.get(language, language)
+    return f"""תרגם את הטקסט הבא ל{lang_name}.
+
+כללים מחייבים:
+- תרגום נאמן ומלא. אל תקצר, אל תסכם, ואל תוסיף שום דבר משלך.
+- שמור מספרים, אחוזים, רמות מחיר וסימולי מניות ($BTC, $INIT) בדיוק כפי שהם.
+- שמור על מבנה השורות המקורי.
+- החזר אך ורק את התרגום, בלי הקדמה ובלי הערות.
+
+--- הטקסט ---
+{text[:MAX_CHARS]}
+--- סוף הטקסט ---"""
+
+
+def translate(text: str, language: str, provider: str, model: str) -> str:
+    """מחזיר תרגום, או מחרוזת ריקה אם נכשל — ואז מוצג המקור."""
+    global _quota_strikes
+
+    if _quota_strikes >= QUOTA_STRIKES_BEFORE_STOP:
+        return ""
+    try:
+        out = complete(build_translation_prompt(text, language), provider, model)
+    except QuotaError as exc:
+        _quota_strikes += 1
+        log.warning("תרגום נכשל, מכסה: %s", exc)
+        return ""
+    except Exception as exc:  # noqa: BLE001
+        log.warning("תרגום נכשל: %s", exc)
+        return ""
+    return out.strip()
 
 
 def summarize(item, language: str, bullets: int, provider: str, model: str) -> str:
