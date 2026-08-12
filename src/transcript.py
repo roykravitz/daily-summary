@@ -105,8 +105,32 @@ def _via_web(video_id: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+_ip_blocked = False
+
+BLOCK_MARKERS = ("IpBlocked", "RequestBlocked", "blocking requests from your IP")
+
+
+def reset_block_state() -> None:
+    global _ip_blocked
+    _ip_blocked = False
+
+
+def _looks_like_ip_block(exc: Exception) -> bool:
+    return type(exc).__name__ in BLOCK_MARKERS or any(
+        marker in str(exc) for marker in BLOCK_MARKERS
+    )
+
+
 def fetch_transcript(video_id: str, retries: int = 1) -> str:
-    """מחזיר תמלול, או מחרוזת ריקה אם כל השיטות נכשלו."""
+    """מחזיר תמלול, או מחרוזת ריקה אם כל השיטות נכשלו.
+
+    כשיוטיוב חוסם את הכתובת, כל ניסיון נוסף רק מעמיק את החסימה. לכן
+    ברגע שמזוהה חסימה מפסיקים לנסות עד סוף הריצה.
+    """
+    global _ip_blocked
+
+    if _ip_blocked:
+        return ""
     for method in (_via_api, _via_web):
         for attempt in range(retries + 1):
             try:
@@ -117,6 +141,14 @@ def fetch_transcript(video_id: str, retries: int = 1) -> str:
                 log.debug("%s החזיר תמלול קצר מדי ל-%s", method.__name__, video_id)
                 break
             except Exception as exc:  # noqa: BLE001 - נופלים לשיטה הבאה
+                if _looks_like_ip_block(exc):
+                    _ip_blocked = True
+                    log.error(
+                        "יוטיוב חוסם את כתובת ה-IP הזו. מפסיק למשוך תמלולים בריצה הזו — "
+                        "ניסיונות נוספים רק מאריכים את החסימה. היא חולפת מעצמה תוך שעות. "
+                        "אם זה חוזר, ראה את הסעיף על תמלולים ב-README."
+                    )
+                    return ""
                 log.debug("%s נכשל ל-%s (ניסיון %d): %s", method.__name__, video_id, attempt + 1, exc)
                 if attempt < retries:
                     time.sleep(2)

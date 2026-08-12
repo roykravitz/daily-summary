@@ -679,3 +679,52 @@ def test_translation_prompt_forbids_summarising():
     assert "$BTC support at 63,800" in prompt
     assert "אל תקצר" in prompt
     assert "עברית" in prompt
+
+
+# ------------------------------------------------------------ חסימת IP
+
+def test_ip_block_stops_further_transcript_attempts(monkeypatch):
+    """כל ניסיון נוסף אחרי חסימה רק מאריך אותה — צריך לעצור מיד."""
+    from src import transcript
+
+    transcript.reset_block_state()
+    calls = []
+
+    class IpBlocked(Exception):
+        pass
+
+    def boom(video_id):
+        calls.append(video_id)
+        raise IpBlocked("YouTube is blocking requests from your IP")
+
+    monkeypatch.setattr(transcript, "_via_api", boom)
+    monkeypatch.setattr(transcript, "_via_web", boom)
+
+    assert transcript.fetch_transcript("aaa") == ""
+    assert transcript.fetch_transcript("bbb") == ""
+    assert transcript.fetch_transcript("ccc") == ""
+    assert calls == ["aaa"]          # רק הראשון ניסה
+    transcript.reset_block_state()
+
+
+def test_ordinary_transcript_failure_still_tries_both_methods(monkeypatch):
+    from src import transcript
+
+    transcript.reset_block_state()
+    calls = []
+
+    def api_fails(video_id):
+        calls.append("api")
+        raise ValueError("אין כתוביות")
+
+    def web_works(video_id):
+        calls.append("web")
+        return "טקסט " * 100
+
+    monkeypatch.setattr(transcript, "_via_api", api_fails)
+    monkeypatch.setattr(transcript, "_via_web", web_works)
+    monkeypatch.setattr(transcript.time, "sleep", lambda s: None)
+
+    assert len(transcript.fetch_transcript("x")) > 200
+    assert "web" in calls
+    transcript.reset_block_state()
