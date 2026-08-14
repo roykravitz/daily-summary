@@ -55,6 +55,9 @@ class Item:
     # את זה כזמן פרסום — זה בדיוק האות שגורם לחשוב שתוכן ישן הוא טרי.
     published_is_fetch_time: bool = False
     images: list[str] = field(default_factory=list)
+    # בציוץ הכותרת היא הטקסט עצמו. בלי הסימון הזה, טקסט שתורגם היה מודפס
+    # פעמיים — פעם במקור ופעם בתרגום — כי השניים כבר לא נראים זהים.
+    title_is_content: bool = False
 
     @property
     def has_content(self) -> bool:
@@ -242,6 +245,7 @@ def fetch_feed(src, limit: int, cache: dict) -> list[Item]:
         body = pick("content:encoded", "description", "atom:content", "atom:summary")
         if not link and not title:
             continue
+        content = _strip_html(body)
         items.append(
             Item(
                 uid=f"feed:{link or title}",
@@ -249,13 +253,23 @@ def fetch_feed(src, limit: int, cache: dict) -> list[Item]:
                 title=title or link,
                 url=link,
                 published=published,
-                content=_strip_html(body),
+                content=content,
                 content_kind="feed",
                 focus=src.focus,
                 images=_extract_images(body),
+                title_is_content=_same_text(title, content),
             )
         )
     return items
+
+
+def _same_text(a: str, b: str) -> bool:
+    """האם שני הטקסטים זהים עד כדי רווחים. פידים חותכים לפעמים את הכותרת."""
+    norm_a, norm_b = " ".join(a.split()), " ".join(b.split())
+    if not norm_a or not norm_b:
+        return False
+    shorter, longer = sorted((norm_a, norm_b), key=len)
+    return longer.startswith(shorter[:120])
 
 
 def load_feed_content(item: Item) -> None:

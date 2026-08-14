@@ -108,7 +108,8 @@ def source_header(item, tz: str, language: str = "he") -> str:
 
 def _entry(item, summary: str, tz: str, language: str) -> str:
     lines = [source_header(item, tz, language)]
-    if not _title_repeats(item.title, summary):
+    # כותרת שהיא הטקסט עצמו לא מודפסת — גם כשהטקסט תורגם ושוב לא נראה זהה לה
+    if not item.title_is_content and not _title_repeats(item.title, summary):
         lines.append(item.title)
     lines.append(summary)
     lines.append(item.url)

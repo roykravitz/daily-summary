@@ -728,3 +728,41 @@ def test_ordinary_transcript_failure_still_tries_both_methods(monkeypatch):
     assert len(transcript.fetch_transcript("x")) > 200
     assert "web" in calls
     transcript.reset_block_state()
+
+
+# ------------------------------------------------------------ ציוץ מתורגם
+
+TWEET_FEED = """<?xml version="1.0"?><rss version="2.0"><channel><item>
+  <title>GN We have now reached the limit of what we can bear. Three months of trading.</title>
+  <link>https://x.com/u/status/1</link>
+  <pubDate>Fri, 14 Aug 2026 03:15:00 GMT</pubDate>
+  <description>&lt;p&gt;GN&lt;br&gt;&lt;br&gt;We have now reached the limit of what we can bear. Three months of trading.&lt;/p&gt;</description>
+</item></channel></rss>"""
+
+
+def test_tweet_title_marked_as_content(monkeypatch):
+    class FakeResponse:
+        content = TWEET_FEED.encode("utf-8")
+
+    monkeypatch.setattr("src.fetchers._get", lambda url, **kw: FakeResponse())
+    item = fetch_feed(Source("twitter", "EliZ", "https://x/rss"), 5, {})[0]
+    assert item.title_is_content is True
+
+
+def test_translated_tweet_not_printed_twice():
+    """התרגום גורם לכותרת ולתוכן להיראות שונים — בלי הסימון הציוץ הודפס פעמיים."""
+    item = _item("EliZ", title="GN We have now reached the limit of what we can bear.")
+    item.title_is_content = True
+    msg = build_message([(item, "GN הגענו לגבול של מה שאנחנו יכולים לשאת.")], "he", "Asia/Jerusalem")
+
+    assert "We have now reached" not in msg      # המקור באנגלית לא מודפס
+    assert "הגענו לגבול" in msg                   # התרגום כן
+    assert msg.count("EliZ") == 1
+
+
+def test_article_title_still_printed():
+    """בכתבה הכותרת שונה מהגוף וחייבת להישאר."""
+    item = _item("פיד", title="הנפט מזנק 4%")
+    assert item.title_is_content is False
+    msg = build_message([(item, "• תוכן הכתבה על משהו אחר לגמרי")], "he", "Asia/Jerusalem")
+    assert "הנפט מזנק 4%" in msg
