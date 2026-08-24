@@ -40,6 +40,11 @@ _quota_strikes = 0
 
 RATE_LIMIT_MAX_WAIT = 60
 
+# 503/500/504 אצל גוגל הם כמעט תמיד עומס חולף — נמדד בפועל שניסיון שלישי
+# אחרי כ-16 שניות הצליח כשראשון ושני נכשלו. שלוש חזרות עם המתנה גוברת.
+SERVER_ERROR_CODES = {500, 502, 503, 504}
+SERVER_ERROR_BACKOFF = (5, 10, 20)
+
 
 def reset_quota_state() -> None:
     global _quota_strikes
@@ -119,6 +124,19 @@ def _gemini(prompt: str, model: str) -> str:
         resp = call(config)
         if resp.status_code == 429:
             raise QuotaError(_quota_message(resp))
+
+    if resp.status_code in SERVER_ERROR_CODES:
+        # עומס זמני אצל גוגל (503) או שגיאת שרת חולפת — לא קשור למכסה שלנו,
+        # וברוב המקרים חולף תוך שניות ספורות. מוותרים רק אחרי כמה ניסיונות.
+        for attempt, wait in enumerate(SERVER_ERROR_BACKOFF, start=1):
+            log.info(
+                "Gemini החזיר %d (עומס זמני) — ממתין %d שניות ומנסה שוב (ניסיון %d/%d)",
+                resp.status_code, wait, attempt, len(SERVER_ERROR_BACKOFF),
+            )
+            time.sleep(wait)
+            resp = call(config)
+            if resp.status_code not in SERVER_ERROR_CODES:
+                break
 
     if not resp.ok:
         raise LLMError(f"Gemini {resp.status_code}: {resp.text[:300]}")

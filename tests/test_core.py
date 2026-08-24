@@ -766,3 +766,57 @@ def test_article_title_still_printed():
     assert item.title_is_content is False
     msg = build_message([(item, "• תוכן הכתבה על משהו אחר לגמרי")], "he", "Asia/Jerusalem")
     assert "הנפט מזנק 4%" in msg
+
+
+# ------------------------------------------------------------ עומס זמני (503) אצל גוגל
+
+def test_gemini_retries_on_server_overload(monkeypatch):
+    """503 הוא עומס זמני אצל גוגל, לא בעיה במכסה — חייב לנסות שוב ולא לוותר מיד."""
+    from src import llm
+
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, status):
+            self.status_code = status
+            self.ok = status == 200
+            self.text = '{"error":{"message":"overloaded"}}'
+
+        def json(self):
+            return {
+                "candidates": [{"content": {"parts": [{"text": "תשובה"}]}, "finishReason": "STOP"}],
+                "usageMetadata": {},
+            }
+
+    def fake_post(url, headers, json, timeout):
+        calls.append(1)
+        # שני 503 ואז הצלחה — בדיוק מה שנמדד בפועל מול גוגל
+        return FakeResponse(503 if len(calls) <= 2 else 200)
+
+    monkeypatch.setattr(llm.requests, "post", fake_post)
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+
+    text = llm._gemini("שלום", "gemini-flash-latest")
+    assert text == "תשובה"
+    assert len(calls) == 3
+
+
+def test_gemini_gives_up_after_max_server_error_retries(monkeypatch):
+    from src import llm
+
+    calls = []
+
+    class FakeResponse:
+        status_code = 503
+        ok = False
+        text = '{"error":{"message":"still overloaded"}}'
+
+    monkeypatch.setattr(llm.requests, "post", lambda *a, **kw: (calls.append(1), FakeResponse())[1])
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+
+    with pytest.raises(llm.LLMError):
+        llm._gemini("שלום", "gemini-flash-latest")
+    # קריאה ראשונה + כל הניסיונות החוזרים המוגדרים
+    assert len(calls) == 1 + len(llm.SERVER_ERROR_BACKOFF)
