@@ -820,3 +820,100 @@ def test_gemini_gives_up_after_max_server_error_retries(monkeypatch):
         llm._gemini("שלום", "gemini-flash-latest")
     # קריאה ראשונה + כל הניסיונות החוזרים המוגדרים
     assert len(calls) == 1 + len(llm.SERVER_ERROR_BACKOFF)
+
+
+# ------------------------------------------------------------ timeout ברשת מול Gemini
+
+def test_gemini_retries_on_network_timeout_then_succeeds(monkeypatch):
+    """קריאה שנתקעת (timeout) חייבת להיחשב כמו 503 — ניסיון חוזר, לא ויתור מיידי."""
+    from src import llm
+
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+        ok = True
+
+        def json(self):
+            return {
+                "candidates": [{"content": {"parts": [{"text": "תשובה"}]}, "finishReason": "STOP"}],
+                "usageMetadata": {},
+            }
+
+    def fake_post(*a, **kw):
+        calls.append(1)
+        if len(calls) <= 2:
+            raise llm.requests.exceptions.ReadTimeout("read timed out")
+        return FakeResponse()
+
+    monkeypatch.setattr(llm.requests, "post", fake_post)
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+
+    assert llm._gemini("שלום", "gemini-flash-latest") == "תשובה"
+    assert len(calls) == 3
+
+
+def test_gemini_raises_transient_after_persistent_timeout(monkeypatch):
+    from src import llm
+
+    def always_times_out(*a, **kw):
+        raise llm.requests.exceptions.ConnectionError("connection reset")
+
+    monkeypatch.setattr(llm.requests, "post", always_times_out)
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+
+    with pytest.raises(llm.TransientProviderError):
+        llm._gemini("שלום", "gemini-flash-latest")
+
+
+def test_transient_provider_error_trips_breaker_like_quota(monkeypatch):
+    """תקלת ספק מתמשכת חייבת לעצור את הריצה — אחרת כל פריט שורף שוב את כל ההמתנות."""
+    from src import llm
+
+    llm.reset_quota_state()
+    llm.reset_transient_state()
+    calls = []
+
+    def boom(prompt, provider, model):
+        calls.append(prompt)
+        raise llm.TransientProviderError("Gemini לא הגיב")
+
+    monkeypatch.setattr(llm, "complete", boom)
+    item = _item()
+    item.content = "טקסט ארוך מספיק כדי לעבור את הסף " * 20
+
+    for _ in range(5):
+        assert llm.summarize(item, "he", 5, "gemini", "m") == ""
+
+    assert len(calls) == llm.TRANSIENT_STRIKES_BEFORE_STOP
+    llm.reset_transient_state()
+
+
+def test_gemini_recognizes_quota_error_that_arrives_only_on_retry(monkeypatch):
+    """429 שמגיע אחרי שני timeout-ים חייב עדיין להיחשב QuotaError, לא שגיאה כללית."""
+    from src import llm
+
+    calls = []
+
+    class Fake429:
+        status_code = 429
+        ok = False
+        text = '{"error":{"message":"quota"}}'
+
+        def json(self):
+            return {"error": {"details": []}}
+
+    def flaky_then_429(*a, **kw):
+        calls.append(1)
+        if len(calls) <= 2:
+            raise llm.requests.exceptions.ReadTimeout("timed out")
+        return Fake429()
+
+    monkeypatch.setattr(llm.requests, "post", flaky_then_429)
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+
+    with pytest.raises(llm.QuotaError):
+        llm._gemini("שלום", "gemini-flash-latest")

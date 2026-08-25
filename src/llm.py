@@ -16,7 +16,7 @@ import requests
 
 log = logging.getLogger(__name__)
 
-TIMEOUT = 180
+TIMEOUT = 60               # תשובה תקינה לוקחת שניות בודדות; לא לחכות דקות לתקועה
 MAX_CHARS = 40000          # חיתוך תוכן ארוך לפני שליחה למודל
 MAX_OUTPUT_TOKENS = 8192   # נדיב בכוונה — טוקני חשיבה נספרים בתוך המגבלה
 
@@ -31,17 +31,32 @@ class QuotaError(LLMError):
     """חריגה ממכסה או מקצב הבקשות (429)."""
 
 
-# מפסק: אחרי כמה כשלי מכסה ברצף אין טעם להמשיך לנסות בריצה הזו
+class TransientProviderError(LLMError):
+    """תקלת רשת או שרת אצל הספק שנשארה גם אחרי כל הניסיונות החוזרים.
+
+    בשונה מ-QuotaError (שאומר "המכסה נגמרת"), זה אומר "הספק לא עונה כרגע" —
+    לפעמים עומס חולף, לפעמים תקלה אמיתית שנמשכת. אין דרך להבדיל מבפנים,
+    ולכן שתיהן מפעילות את אותו מפסק כדי לא לבזבז את כל חלון הריצה על
+    ניסיונות שכנראה יכשלו כולם.
+    """
+
+
+# מפסק: אחרי כמה כשלים ברצף אין טעם להמשיך לנסות בריצה הזו — בין אם זו
+# מכסה שנגמרה או תקלת רשת/שרת מתמשכת. שתי הקטגוריות חולקות את אותו מפסק.
 QUOTA_STRIKES_BEFORE_STOP = 2
+TRANSIENT_STRIKES_BEFORE_STOP = 2
 RATE_LIMIT_WAIT = 20
 
 _quota_strikes = 0
+_transient_strikes = 0
 
 
 RATE_LIMIT_MAX_WAIT = 60
 
-# 503/500/504 אצל גוגל הם כמעט תמיד עומס חולף — נמדד בפועל שניסיון שלישי
-# אחרי כ-16 שניות הצליח כשראשון ושני נכשלו. שלוש חזרות עם המתנה גוברת.
+# 503/500/504 אצל גוגל הם לפעמים עומס חולף (נמדד: ניסיון שלישי אחרי כ-16
+# שניות הצליח) ולפעמים תקלה מתמשכת. אותו דבר לגבי timeout ברמת הרשת —
+# קריאה יכולה להיתקע בלי שום תשובה. שתי הקטגוריות מקבלות את אותו טיפול:
+# כמה ניסיונות עם המתנה גוברת, ואז וויתור עם הודעה ברורה.
 SERVER_ERROR_CODES = {500, 502, 503, 504}
 SERVER_ERROR_BACKOFF = (5, 10, 20)
 
@@ -49,6 +64,11 @@ SERVER_ERROR_BACKOFF = (5, 10, 20)
 def reset_quota_state() -> None:
     global _quota_strikes
     _quota_strikes = 0
+
+
+def reset_transient_state() -> None:
+    global _transient_strikes
+    _transient_strikes = 0
 
 
 def _quota_details(resp) -> list[dict]:
@@ -102,43 +122,60 @@ def _gemini(prompt: str, model: str) -> str:
     }
 
     def call(cfg):
-        return requests.post(
-            url,
-            headers={"x-goog-api-key": key, "Content-Type": "application/json"},
-            json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": cfg},
-            timeout=TIMEOUT,
-        )
+        """מחזיר תגובה, או None אם הקריאה נכשלה ברמת הרשת (timeout, ניתוק)."""
+        try:
+            return requests.post(
+                url,
+                headers={"x-goog-api-key": key, "Content-Type": "application/json"},
+                json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": cfg},
+                timeout=TIMEOUT,
+            )
+        except requests.exceptions.RequestException as exc:
+            log.debug("קריאה ל-Gemini נכשלה ברשת: %s", exc)
+            return None
+
+    def needs_retry(r) -> bool:
+        return r is None or r.status_code in SERVER_ERROR_CODES
 
     resp = call(config)
-    if resp.status_code == 400 and "thinkingConfig" in json.dumps(config):
+    if resp is not None and resp.status_code == 400 and "thinkingConfig" in json.dumps(config):
         # דגמים ישנים יותר לא מכירים את השדה — מנסים שוב בלעדיו
         log.debug("הדגם %s לא תומך ב-thinkingLevel, מנסה בלעדיו", model)
         config.pop("thinkingConfig")
         resp = call(config)
 
-    if resp.status_code == 429:
+    if resp is not None and resp.status_code == 429:
         # מגבלת קצב לדקה חולפת מעצמה; מגבלה יומית לא. מנסים פעם אחת ומוותרים.
         wait = min(_retry_delay(resp) or RATE_LIMIT_WAIT, RATE_LIMIT_MAX_WAIT)
         log.info("Gemini החזיר 429 — ממתין %d שניות ומנסה שוב", wait)
         time.sleep(wait)
         resp = call(config)
-        if resp.status_code == 429:
+        if resp is not None and resp.status_code == 429:
             raise QuotaError(_quota_message(resp))
 
-    if resp.status_code in SERVER_ERROR_CODES:
-        # עומס זמני אצל גוגל (503) או שגיאת שרת חולפת — לא קשור למכסה שלנו,
-        # וברוב המקרים חולף תוך שניות ספורות. מוותרים רק אחרי כמה ניסיונות.
+    if needs_retry(resp):
+        # עומס זמני, שגיאת שרת, או timeout ברשת — לפעמים חולף תוך שניות,
+        # לפעמים תקלה מתמשכת. מוותרים רק אחרי כמה ניסיונות עם המתנה גוברת.
         for attempt, wait in enumerate(SERVER_ERROR_BACKOFF, start=1):
+            reason = f"{resp.status_code}" if resp is not None else "timeout/ניתוק רשת"
             log.info(
-                "Gemini החזיר %d (עומס זמני) — ממתין %d שניות ומנסה שוב (ניסיון %d/%d)",
-                resp.status_code, wait, attempt, len(SERVER_ERROR_BACKOFF),
+                "Gemini לא הגיב כראוי (%s) — ממתין %d שניות ומנסה שוב (ניסיון %d/%d)",
+                reason, wait, attempt, len(SERVER_ERROR_BACKOFF),
             )
             time.sleep(wait)
             resp = call(config)
-            if resp.status_code not in SERVER_ERROR_CODES:
+            if not needs_retry(resp):
                 break
 
+    # בדיקה מסכמת אחרי כל הניסיונות: תשובה שהגיעה רק בניסיון חוזר (למשל
+    # 429 אחרי שני timeout-ים) לא עברה עדיין דרך הטיפול הייעודי שלה.
+    if resp is None:
+        raise TransientProviderError("Gemini לא הגיב אחרי כל הניסיונות (בעיית רשת או תקלת שרת מתמשכת)")
+    if resp.status_code == 429:
+        raise QuotaError(_quota_message(resp))
     if not resp.ok:
+        if resp.status_code in SERVER_ERROR_CODES:
+            raise TransientProviderError(f"Gemini {resp.status_code}: {resp.text[:300]}")
         raise LLMError(f"Gemini {resp.status_code}: {resp.text[:300]}")
 
     data = resp.json()
@@ -334,17 +371,28 @@ def build_translation_prompt(text: str, language: str) -> str:
 --- סוף הטקסט ---"""
 
 
+def _breakers_tripped() -> bool:
+    return (
+        _quota_strikes >= QUOTA_STRIKES_BEFORE_STOP
+        or _transient_strikes >= TRANSIENT_STRIKES_BEFORE_STOP
+    )
+
+
 def translate(text: str, language: str, provider: str, model: str) -> str:
     """מחזיר תרגום, או מחרוזת ריקה אם נכשל — ואז מוצג המקור."""
-    global _quota_strikes
+    global _quota_strikes, _transient_strikes
 
-    if _quota_strikes >= QUOTA_STRIKES_BEFORE_STOP:
+    if _breakers_tripped():
         return ""
     try:
         out = complete(build_translation_prompt(text, language), provider, model)
     except QuotaError as exc:
         _quota_strikes += 1
         log.warning("תרגום נכשל, מכסה: %s", exc)
+        return ""
+    except TransientProviderError as exc:
+        _transient_strikes += 1
+        log.warning("תרגום נכשל, תקלת ספק: %s", exc)
         return ""
     except Exception as exc:  # noqa: BLE001
         log.warning("תרגום נכשל: %s", exc)
@@ -354,9 +402,9 @@ def translate(text: str, language: str, provider: str, model: str) -> str:
 
 def summarize(item, language: str, bullets: int, provider: str, model: str) -> str:
     """מחזיר נקודות סיכום, או מחרוזת ריקה אם אין מספיק תוכן."""
-    global _quota_strikes
+    global _quota_strikes, _transient_strikes
 
-    if _quota_strikes >= QUOTA_STRIKES_BEFORE_STOP:
+    if _breakers_tripped():
         return ""
 
     try:
@@ -370,6 +418,16 @@ def summarize(item, language: str, bullets: int, provider: str, model: str) -> s
             )
         else:
             log.warning("מכסה נגמרה עבור %s: %s", item.url, exc)
+        return ""
+    except TransientProviderError as exc:
+        _transient_strikes += 1
+        if _transient_strikes >= TRANSIENT_STRIKES_BEFORE_STOP:
+            log.error(
+                "ספק המודל לא מגיב כרגע (רשת או תקלת שרת) — מדלג על שאר "
+                "הפריטים בריצה הזו כדי לא לתקוע אותה. (%s)", exc
+            )
+        else:
+            log.warning("תקלת ספק עבור %s: %s", item.url, exc)
         return ""
     except LLMError as exc:
         log.warning("סיכום נכשל עבור %s: %s", item.url, exc)
