@@ -5,8 +5,8 @@ language: he
 timezone: Asia/Jerusalem
 
 llm:
-  provider: gemini
-  model: "gemini-flash-latest"
+  provider: anthropic
+  model: "claude-sonnet-5"
 
 defaults:
   lookback_hours: 24

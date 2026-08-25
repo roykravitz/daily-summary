@@ -80,7 +80,19 @@ def _quota_details(resp) -> list[dict]:
 
 
 def _retry_delay(resp) -> int:
-    """שניות ההמתנה ש-Google ביקש, אם ציין."""
+    """שניות ההמתנה שהספק ביקש, אם ציין.
+
+    קודם בודקים את תקן ה-Retry-After הרגיל (אנתרופיק ורוב הספקים),
+    ובנפילה אחורה את הפורמט הספציפי של גוגל (retryDelay בתוך גוף השגיאה).
+    """
+    headers = getattr(resp, "headers", None)
+    if headers:
+        value = headers.get("retry-after")
+        if value:
+            try:
+                return int(float(value)) + 1
+            except ValueError:
+                pass
     try:
         for block in resp.json()["error"].get("details", []):
             delay = block.get("retryDelay", "")
@@ -89,6 +101,55 @@ def _retry_delay(resp) -> int:
     except (ValueError, KeyError, TypeError):
         pass
     return 0
+
+
+def _generic_quota_message(resp, provider: str) -> str:
+    """הודעת מכסה לספקים שלא מפרטים כמו גוגל (מבנה השגיאה של אנתרופיק ו-OpenAI פשוט יותר)."""
+    try:
+        msg = resp.json().get("error", {}).get("message", "")
+    except (ValueError, AttributeError):
+        msg = ""
+    return f"המכסה או קצב הבקשות של {provider} מוצו. {msg}"[:300]
+
+
+_UNSET = object()
+
+
+def _call_with_retries(call, server_error_codes: set[int], first_resp=_UNSET):
+    """מפעיל call() עם ניסיונות חוזרים על 429 ועל שגיאות שרת/רשת חולפות.
+
+    משותף לכל הספקים: call() מבצעת קריאת HTTP בודדת ומחזירה Response,
+    או None אם נכשלה ברמת הרשת (טיימאאוט, ניתוק). מחזיר את ה-Response
+    האחרון שהתקבל (עשוי עדיין להיות שגיאה) או None אם כל הניסיונות
+    נכשלו ברמת הרשת. הקורא אחראי לפרש את התוצאה הסופית (429/5xx/הצלחה).
+    """
+    def needs_retry(r) -> bool:
+        return r is None or r.status_code in server_error_codes
+
+    resp = call() if first_resp is _UNSET else first_resp
+
+    if resp is not None and resp.status_code == 429:
+        # מגבלת קצב לדקה חולפת מעצמה; מגבלה יומית לא. מנסים פעם אחת ומוותרים.
+        wait = min(_retry_delay(resp) or RATE_LIMIT_WAIT, RATE_LIMIT_MAX_WAIT)
+        log.info("קיבלתי 429 — ממתין %d שניות ומנסה שוב", wait)
+        time.sleep(wait)
+        resp = call()
+
+    if needs_retry(resp):
+        # עומס זמני, שגיאת שרת, או timeout ברשת — לפעמים חולף תוך שניות,
+        # לפעמים תקלה מתמשכת. מוותרים רק אחרי כמה ניסיונות עם המתנה גוברת.
+        for attempt, wait in enumerate(SERVER_ERROR_BACKOFF, start=1):
+            reason = f"{resp.status_code}" if resp is not None else "timeout/ניתוק רשת"
+            log.info(
+                "לא התקבלה תשובה תקינה (%s) — ממתין %d שניות ומנסה שוב (ניסיון %d/%d)",
+                reason, wait, attempt, len(SERVER_ERROR_BACKOFF),
+            )
+            time.sleep(wait)
+            resp = call()
+            if not needs_retry(resp):
+                break
+
+    return resp
 
 
 def _quota_message(resp) -> str:
@@ -121,54 +182,28 @@ def _gemini(prompt: str, model: str) -> str:
         "thinkingConfig": {"thinkingLevel": "low"},
     }
 
-    def call(cfg):
+    def call():
         """מחזיר תגובה, או None אם הקריאה נכשלה ברמת הרשת (timeout, ניתוק)."""
         try:
             return requests.post(
                 url,
                 headers={"x-goog-api-key": key, "Content-Type": "application/json"},
-                json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": cfg},
+                json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": config},
                 timeout=TIMEOUT,
             )
         except requests.exceptions.RequestException as exc:
             log.debug("קריאה ל-Gemini נכשלה ברשת: %s", exc)
             return None
 
-    def needs_retry(r) -> bool:
-        return r is None or r.status_code in SERVER_ERROR_CODES
-
-    resp = call(config)
+    resp = call()
     if resp is not None and resp.status_code == 400 and "thinkingConfig" in json.dumps(config):
         # דגמים ישנים יותר לא מכירים את השדה — מנסים שוב בלעדיו
         log.debug("הדגם %s לא תומך ב-thinkingLevel, מנסה בלעדיו", model)
         config.pop("thinkingConfig")
-        resp = call(config)
+        resp = call()
 
-    if resp is not None and resp.status_code == 429:
-        # מגבלת קצב לדקה חולפת מעצמה; מגבלה יומית לא. מנסים פעם אחת ומוותרים.
-        wait = min(_retry_delay(resp) or RATE_LIMIT_WAIT, RATE_LIMIT_MAX_WAIT)
-        log.info("Gemini החזיר 429 — ממתין %d שניות ומנסה שוב", wait)
-        time.sleep(wait)
-        resp = call(config)
-        if resp is not None and resp.status_code == 429:
-            raise QuotaError(_quota_message(resp))
+    resp = _call_with_retries(call, SERVER_ERROR_CODES, first_resp=resp)
 
-    if needs_retry(resp):
-        # עומס זמני, שגיאת שרת, או timeout ברשת — לפעמים חולף תוך שניות,
-        # לפעמים תקלה מתמשכת. מוותרים רק אחרי כמה ניסיונות עם המתנה גוברת.
-        for attempt, wait in enumerate(SERVER_ERROR_BACKOFF, start=1):
-            reason = f"{resp.status_code}" if resp is not None else "timeout/ניתוק רשת"
-            log.info(
-                "Gemini לא הגיב כראוי (%s) — ממתין %d שניות ומנסה שוב (ניסיון %d/%d)",
-                reason, wait, attempt, len(SERVER_ERROR_BACKOFF),
-            )
-            time.sleep(wait)
-            resp = call(config)
-            if not needs_retry(resp):
-                break
-
-    # בדיקה מסכמת אחרי כל הניסיונות: תשובה שהגיעה רק בניסיון חוזר (למשל
-    # 429 אחרי שני timeout-ים) לא עברה עדיין דרך הטיפול הייעודי שלה.
     if resp is None:
         raise TransientProviderError("Gemini לא הגיב אחרי כל הניסיונות (בעיית רשת או תקלת שרת מתמשכת)")
     if resp.status_code == 429:
@@ -196,29 +231,52 @@ def _gemini(prompt: str, model: str) -> str:
     return text
 
 
+# 529 הוא overloaded_error הספציפי של אנתרופיק, בנוסף לקודי השרת הרגילים
+ANTHROPIC_SERVER_ERROR_CODES = {500, 502, 503, 504, 529}
+
+
 def _anthropic(prompt: str, model: str) -> str:
     key = os.getenv("ANTHROPIC_API_KEY")
     if not key:
         raise LLMError("חסר ANTHROPIC_API_KEY")
-    resp = requests.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key": key,
-            "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": model,
-            "max_tokens": MAX_OUTPUT_TOKENS,
-            "temperature": 0.2,
-            "messages": [{"role": "user", "content": prompt}],
-        },
-        timeout=TIMEOUT,
-    )
+
+    def call():
+        try:
+            return requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "max_tokens": MAX_OUTPUT_TOKENS,
+                    "temperature": 0.2,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+                timeout=TIMEOUT,
+            )
+        except requests.exceptions.RequestException as exc:
+            log.debug("קריאה ל-Anthropic נכשלה ברשת: %s", exc)
+            return None
+
+    resp = _call_with_retries(call, ANTHROPIC_SERVER_ERROR_CODES)
+
+    if resp is None:
+        raise TransientProviderError("Anthropic לא הגיב אחרי כל הניסיונות (בעיית רשת או תקלת שרת מתמשכת)")
+    if resp.status_code == 429:
+        raise QuotaError(_generic_quota_message(resp, "Anthropic"))
     if not resp.ok:
+        if resp.status_code in ANTHROPIC_SERVER_ERROR_CODES:
+            raise TransientProviderError(f"Anthropic {resp.status_code}: {resp.text[:300]}")
         raise LLMError(f"Anthropic {resp.status_code}: {resp.text[:300]}")
+
     blocks = resp.json().get("content", [])
-    return "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
+    text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
+    if not text:
+        raise LLMError("Anthropic החזיר תשובה ריקה")
+    return text
 
 
 def _openai(prompt: str, model: str) -> str:

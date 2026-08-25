@@ -917,3 +917,98 @@ def test_gemini_recognizes_quota_error_that_arrives_only_on_retry(monkeypatch):
 
     with pytest.raises(llm.QuotaError):
         llm._gemini("שלום", "gemini-flash-latest")
+
+
+# ------------------------------------------------------------ עמידות Anthropic
+
+def test_anthropic_retries_on_overloaded_then_succeeds(monkeypatch):
+    """529 הוא overloaded_error הספציפי של אנתרופיק — חייב להתנהג כמו 503 אצל גוגל."""
+    from src import llm
+
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, status):
+            self.status_code = status
+            self.ok = status == 200
+            self.text = '{"error":{"message":"Overloaded"}}'
+
+        def json(self):
+            return {"content": [{"type": "text", "text": "תשובה"}]}
+
+    def fake_post(url, headers, json, timeout):
+        calls.append(1)
+        return FakeResponse(529 if len(calls) <= 2 else 200)
+
+    monkeypatch.setattr(llm.requests, "post", fake_post)
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+
+    assert llm._anthropic("שלום", "claude-sonnet-5") == "תשובה"
+    assert len(calls) == 3
+
+
+def test_anthropic_raises_quota_error_on_429(monkeypatch):
+    from src import llm
+
+    class Fake429:
+        status_code = 429
+        ok = False
+        text = '{"error":{"message":"rate limited"}}'
+        headers = {}
+
+        def json(self):
+            return {"error": {"message": "rate limited"}}
+
+    monkeypatch.setattr(llm.requests, "post", lambda *a, **kw: Fake429())
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+
+    with pytest.raises(llm.QuotaError, match="Anthropic"):
+        llm._anthropic("שלום", "claude-sonnet-5")
+
+
+def test_anthropic_retries_on_network_timeout(monkeypatch):
+    from src import llm
+
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+        ok = True
+
+        def json(self):
+            return {"content": [{"type": "text", "text": "תשובה"}]}
+
+    def fake_post(*a, **kw):
+        calls.append(1)
+        if len(calls) == 1:
+            raise llm.requests.exceptions.ReadTimeout("timed out")
+        return FakeResponse()
+
+    monkeypatch.setattr(llm.requests, "post", fake_post)
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+
+    assert llm._anthropic("שלום", "claude-sonnet-5") == "תשובה"
+    assert len(calls) == 2
+
+
+def test_anthropic_missing_key_raises_clear_error(monkeypatch):
+    from src import llm
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with pytest.raises(llm.LLMError, match="ANTHROPIC_API_KEY"):
+        llm._anthropic("שלום", "claude-sonnet-5")
+
+
+def test_retry_delay_prefers_standard_header_over_google_format():
+    """Anthropic ורוב הספקים משתמשים ב-Retry-After התקני, לא בפורמט של גוגל."""
+    from src.llm import _retry_delay
+
+    class FakeResponse:
+        headers = {"retry-after": "12"}
+        def json(self):
+            return {}
+
+    assert _retry_delay(FakeResponse()) == 13
