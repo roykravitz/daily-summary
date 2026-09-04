@@ -8,8 +8,16 @@ language: he                 # he | en | ar | ru
 timezone: Asia/Jerusalem
 
 llm:
-  provider: gemini           # gemini | anthropic | openai | claude_cli | mock
+  provider: gemini           # gemini | groq | anthropic | openai | mock
   model: "gemini-flash-latest"
+  # אופציונלי: שרשרת גיבוי, מנוסה לפי הסדר. חוליה בלי מפתח ב-.env מדולגת בשקט.
+  chain:
+    - provider: gemini
+      model: "gemini-flash-latest"
+    - provider: gemini
+      model: "gemini-flash-lite-latest"
+    - provider: groq
+      model: "llama-3.3-70b-versatile"
 
 # ברירות מחדל לכל הנושאים. כל נושא יכול לדרוס אותן.
 defaults:

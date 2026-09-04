@@ -77,6 +77,8 @@ class Config:
     timezone: str = "Asia/Jerusalem"
     llm_provider: str = "gemini"
     llm_model: str = ""
+    # שרשרת גיבוי: (ספק, דגם) לפי סדר הניסיון. הראשון הוא llm_provider/llm_model.
+    llm_chain: list[tuple[str, str]] = field(default_factory=list)
     topics: list[Topic] = field(default_factory=list)
 
     @property
@@ -88,6 +90,7 @@ DEFAULT_MODELS = {
     "gemini": "gemini-flash-latest",
     "anthropic": "claude-sonnet-5",
     "openai": "gpt-4o-mini",
+    "groq": "llama-3.3-70b-versatile",
     "claude_cli": "",
     "mock": "",
 }
@@ -141,6 +144,19 @@ def load_config(path: Path | None = None) -> Config:
 
     llm = raw.get("llm") or {}
     provider = llm.get("provider", "gemini")
+    model = llm.get("model") or DEFAULT_MODELS.get(provider, "")
+
+    # שרשרת גיבוי אופציונלית. בלעדיה — הספק היחיד הוא השרשרת כולה.
+    chain: list[tuple[str, str]] = []
+    for entry in llm.get("chain") or []:
+        if not isinstance(entry, dict) or not entry.get("provider"):
+            continue
+        p = str(entry["provider"])
+        chain.append((p, entry.get("model") or DEFAULT_MODELS.get(p, "")))
+    if not chain:
+        chain = [(provider, model)]
+    # הראשון בשרשרת הוא הראשי — נשמר גם בשדות הישנים לתאימות אחורה
+    provider, model = chain[0]
 
     # ברירות מחדל: מבלוק defaults, ובנפילה אחורה לשדות של הפורמט הישן
     defaults = {**DEFAULTS}
@@ -168,6 +184,7 @@ def load_config(path: Path | None = None) -> Config:
         language=raw.get("language", "he"),
         timezone=raw.get("timezone", "Asia/Jerusalem"),
         llm_provider=provider,
-        llm_model=llm.get("model") or DEFAULT_MODELS.get(provider, ""),
+        llm_model=model,
+        llm_chain=chain,
         topics=topics,
     )

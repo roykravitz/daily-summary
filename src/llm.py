@@ -41,14 +41,20 @@ class TransientProviderError(LLMError):
     """
 
 
-# מפסק: אחרי כמה כשלים ברצף אין טעם להמשיך לנסות בריצה הזו — בין אם זו
-# מכסה שנגמרה או תקלת רשת/שרת מתמשכת. שתי הקטגוריות חולקות את אותו מפסק.
+class MissingKeyError(LLMError):
+    """מפתח ה-API של הספק לא מוגדר. החוליה הזו בשרשרת מדולגת בשקט."""
+
+
+# מפסק לכל חוליה בשרשרת בנפרד: אחרי כמה כשלים ברצף אין טעם להמשיך לנסות
+# את אותו ספק בריצה הזו — בין אם זו מכסה שנגמרה או תקלת רשת/שרת מתמשכת.
+# הכישלון של חוליה אחת לא נוגע לאחרות: כשמכסת flash-latest נגמרת עוברים
+# ל-flash-lite, וכשגוגל כולה מקרטעת עוברים לספק מחברה אחרת.
 QUOTA_STRIKES_BEFORE_STOP = 2
 TRANSIENT_STRIKES_BEFORE_STOP = 2
 RATE_LIMIT_WAIT = 20
 
-_quota_strikes = 0
-_transient_strikes = 0
+# (ספק, דגם) -> {"quota": n, "transient": n, "disabled": bool}
+_strikes: dict[tuple[str, str], dict] = {}
 
 
 RATE_LIMIT_MAX_WAIT = 60
@@ -62,13 +68,28 @@ SERVER_ERROR_BACKOFF = (5, 10, 20)
 
 
 def reset_quota_state() -> None:
-    global _quota_strikes
-    _quota_strikes = 0
+    _strikes.clear()
 
 
 def reset_transient_state() -> None:
-    global _transient_strikes
-    _transient_strikes = 0
+    _strikes.clear()
+
+
+def _entry_tripped(entry: tuple[str, str]) -> bool:
+    s = _strikes.get(entry)
+    if not s:
+        return False
+    return (
+        s.get("disabled", False)
+        or s.get("quota", 0) >= QUOTA_STRIKES_BEFORE_STOP
+        or s.get("transient", 0) >= TRANSIENT_STRIKES_BEFORE_STOP
+    )
+
+
+def _strike(entry: tuple[str, str], kind: str) -> int:
+    s = _strikes.setdefault(entry, {"quota": 0, "transient": 0, "disabled": False})
+    s[kind] += 1
+    return s[kind]
 
 
 def _quota_details(resp) -> list[dict]:
@@ -171,7 +192,7 @@ def _quota_message(resp) -> str:
 def _gemini(prompt: str, model: str) -> str:
     key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not key:
-        raise LLMError("חסר GEMINI_API_KEY")
+        raise MissingKeyError("חסר GEMINI_API_KEY")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
     # הדגמים החדשים צורכים טוקני חשיבה שנספרים במגבלת הפלט. בלי תקציב נדיב
@@ -238,7 +259,7 @@ ANTHROPIC_SERVER_ERROR_CODES = {500, 502, 503, 504, 529}
 def _anthropic(prompt: str, model: str) -> str:
     key = os.getenv("ANTHROPIC_API_KEY")
     if not key:
-        raise LLMError("חסר ANTHROPIC_API_KEY")
+        raise MissingKeyError("חסר ANTHROPIC_API_KEY")
 
     def call():
         try:
@@ -279,24 +300,65 @@ def _anthropic(prompt: str, model: str) -> str:
     return text
 
 
-def _openai(prompt: str, model: str) -> str:
-    key = os.getenv("OPENAI_API_KEY")
+def _openai_compatible(prompt: str, model: str, *, url: str, key_env: str, name: str) -> str:
+    """ספקים עם API תואם OpenAI (OpenAI עצמו, Groq ועוד) — אותה עמידות כמו Gemini."""
+    key = os.getenv(key_env)
     if not key:
-        raise LLMError("חסר OPENAI_API_KEY")
-    resp = requests.post(
-        "https://api.openai.com/v1/chat/completions",
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        json={
-            "model": model,
-            "temperature": 0.2,
-            "max_tokens": MAX_OUTPUT_TOKENS,
-            "messages": [{"role": "user", "content": prompt}],
-        },
-        timeout=TIMEOUT,
-    )
+        raise MissingKeyError(f"חסר {key_env}")
+
+    def call():
+        try:
+            return requests.post(
+                url,
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={
+                    "model": model,
+                    "temperature": 0.2,
+                    "max_tokens": MAX_OUTPUT_TOKENS,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+                timeout=TIMEOUT,
+            )
+        except requests.exceptions.RequestException as exc:
+            log.debug("קריאה ל-%s נכשלה ברשת: %s", name, exc)
+            return None
+
+    resp = _call_with_retries(call, SERVER_ERROR_CODES)
+
+    if resp is None:
+        raise TransientProviderError(f"{name} לא הגיב אחרי כל הניסיונות (בעיית רשת או תקלת שרת מתמשכת)")
+    if resp.status_code == 429:
+        raise QuotaError(_generic_quota_message(resp, name))
     if not resp.ok:
-        raise LLMError(f"OpenAI {resp.status_code}: {resp.text[:300]}")
-    return resp.json()["choices"][0]["message"]["content"].strip()
+        if resp.status_code in SERVER_ERROR_CODES:
+            raise TransientProviderError(f"{name} {resp.status_code}: {resp.text[:300]}")
+        raise LLMError(f"{name} {resp.status_code}: {resp.text[:300]}")
+
+    try:
+        text = resp.json()["choices"][0]["message"]["content"].strip()
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise LLMError(f"תשובה לא צפויה מ-{name}: {resp.text[:300]}") from exc
+    if not text:
+        raise LLMError(f"{name} החזיר תשובה ריקה")
+    return text
+
+
+def _openai(prompt: str, model: str) -> str:
+    return _openai_compatible(
+        prompt, model,
+        url="https://api.openai.com/v1/chat/completions",
+        key_env="OPENAI_API_KEY", name="OpenAI",
+    )
+
+
+def _groq(prompt: str, model: str) -> str:
+    """Groq — שכבה חינמית נדיבה, מהיר. ספק מחברה אחרת מגוגל, ולכן גיבוי
+    אמיתי ליום שבו כל דגמי Gemini מקרטעים יחד. בלי מפתח — החוליה מדולגת."""
+    return _openai_compatible(
+        prompt, model,
+        url="https://api.groq.com/openai/v1/chat/completions",
+        key_env="GROQ_API_KEY", name="Groq",
+    )
 
 
 def _claude_cli(prompt: str, model: str) -> str:
@@ -339,6 +401,7 @@ PROVIDERS = {
     "gemini": _gemini,
     "anthropic": _anthropic,
     "openai": _openai,
+    "groq": _groq,
     "claude_cli": _claude_cli,
     "mock": _mock,
 }
@@ -429,69 +492,52 @@ def build_translation_prompt(text: str, language: str) -> str:
 --- סוף הטקסט ---"""
 
 
-def _breakers_tripped() -> bool:
-    return (
-        _quota_strikes >= QUOTA_STRIKES_BEFORE_STOP
-        or _transient_strikes >= TRANSIENT_STRIKES_BEFORE_STOP
-    )
+def _run_chain(prompt: str, chain: list[tuple[str, str]], label: str) -> str:
+    """מנסה כל חוליה בשרשרת לפי הסדר עד שאחת מצליחה.
+
+    חוליה שנגמרה לה המכסה או שלא מגיבה מסומנת ומדולגת בהמשך הריצה, כך
+    שהפריט הבא לא משלם שוב את כל ההמתנות עליה. חוליה בלי מפתח API
+    מדולגת בשקט מהרגע הראשון. מחזיר מחרוזת ריקה רק אם כל השרשרת נכשלה.
+    """
+    for index, entry in enumerate(chain):
+        provider, model = entry
+        if _entry_tripped(entry):
+            continue
+        has_next = any(not _entry_tripped(e) for e in chain[index + 1:])
+        try:
+            return complete(prompt, provider, model)
+        except MissingKeyError as exc:
+            _strikes.setdefault(entry, {"quota": 0, "transient": 0})["disabled"] = True
+            log.info("%s/%s לא מוגדר (%s) — מדלג עליו בריצה הזו", provider, model, exc)
+        except QuotaError as exc:
+            if _strike(entry, "quota") >= QUOTA_STRIKES_BEFORE_STOP:
+                log.error("המכסה של %s/%s נגמרה — מדלג עליו בשאר הריצה. (%s)", provider, model, exc)
+            else:
+                log.warning("מכסה נגמרה ב-%s/%s עבור %s: %s", provider, model, label, exc)
+        except TransientProviderError as exc:
+            if _strike(entry, "transient") >= TRANSIENT_STRIKES_BEFORE_STOP:
+                log.error("%s/%s לא מגיב (רשת/שרת) — מדלג עליו בשאר הריצה. (%s)", provider, model, exc)
+            else:
+                log.warning("תקלת ספק ב-%s/%s עבור %s: %s", provider, model, label, exc)
+        except LLMError as exc:
+            log.warning("%s/%s נכשל עבור %s: %s", provider, model, label, exc)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("שגיאה ב-%s/%s עבור %s: %s", provider, model, label, exc)
+        if has_next:
+            log.info("עובר לחוליית הגיבוי הבאה בשרשרת")
+    return ""
 
 
-def translate(text: str, language: str, provider: str, model: str) -> str:
+def translate(text: str, language: str, chain: list[tuple[str, str]]) -> str:
     """מחזיר תרגום, או מחרוזת ריקה אם נכשל — ואז מוצג המקור."""
-    global _quota_strikes, _transient_strikes
-
-    if _breakers_tripped():
-        return ""
-    try:
-        out = complete(build_translation_prompt(text, language), provider, model)
-    except QuotaError as exc:
-        _quota_strikes += 1
-        log.warning("תרגום נכשל, מכסה: %s", exc)
-        return ""
-    except TransientProviderError as exc:
-        _transient_strikes += 1
-        log.warning("תרגום נכשל, תקלת ספק: %s", exc)
-        return ""
-    except Exception as exc:  # noqa: BLE001
-        log.warning("תרגום נכשל: %s", exc)
-        return ""
+    out = _run_chain(build_translation_prompt(text, language), chain, "תרגום")
     return out.strip()
 
 
-def summarize(item, language: str, bullets: int, provider: str, model: str) -> str:
+def summarize(item, language: str, bullets: int, chain: list[tuple[str, str]]) -> str:
     """מחזיר נקודות סיכום, או מחרוזת ריקה אם אין מספיק תוכן."""
-    global _quota_strikes, _transient_strikes
-
-    if _breakers_tripped():
-        return ""
-
-    try:
-        out = complete(build_prompt(item, language, bullets), provider, model)
-    except QuotaError as exc:
-        _quota_strikes += 1
-        if _quota_strikes >= QUOTA_STRIKES_BEFORE_STOP:
-            log.error(
-                "המכסה של ספק המודל נגמרה — מדלג על שאר הפריטים בריצה הזו. "
-                "המכסה החינמית מתאפסת מדי יום. (%s)", exc
-            )
-        else:
-            log.warning("מכסה נגמרה עבור %s: %s", item.url, exc)
-        return ""
-    except TransientProviderError as exc:
-        _transient_strikes += 1
-        if _transient_strikes >= TRANSIENT_STRIKES_BEFORE_STOP:
-            log.error(
-                "ספק המודל לא מגיב כרגע (רשת או תקלת שרת) — מדלג על שאר "
-                "הפריטים בריצה הזו כדי לא לתקוע אותה. (%s)", exc
-            )
-        else:
-            log.warning("תקלת ספק עבור %s: %s", item.url, exc)
-        return ""
-    except LLMError as exc:
-        log.warning("סיכום נכשל עבור %s: %s", item.url, exc)
-        return ""
-    except Exception as exc:  # noqa: BLE001
-        log.warning("שגיאה בסיכום %s: %s", item.url, exc)
+    out = _run_chain(build_prompt(item, language, bullets), chain, item.url)
+    if not out:
         return ""
 
     if "NO_CONTENT" in out or len(out.strip()) < 20:

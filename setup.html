@@ -482,6 +482,16 @@ function buildYaml(){
   L.push("llm:");
   L.push("  provider: " + val("llmProvider"));
   if(val("llmModel")) L.push("  model: " + q(val("llmModel")));
+  // שרשרת גיבוי שנטענה מהקובץ נשמרת, כל עוד הספק הראשי לא שונה בטופס.
+  // הדגם של החוליה הראשונה מסונכרן למה שנבחר בטופס.
+  if(LOADED_CHAIN.length && LOADED_CHAIN[0].provider === val("llmProvider")){
+    L.push("  chain:");
+    LOADED_CHAIN.forEach((e, i) => {
+      const model = (i === 0 && val("llmModel")) ? val("llmModel") : e.model;
+      L.push("    - provider: " + e.provider);
+      if(model) L.push("      model: " + q(model));
+    });
+  }
   L.push("");
   L.push("defaults:");
   L.push("  lookback_hours: " + (+val("lookback")));
@@ -590,6 +600,8 @@ function copyEl(id){
 // ---------------------------------------------------------------- שרת מקומי
 
 let SERVER = false;
+// שרשרת גיבוי (llm.chain) שנטענה מהקובץ — נשמרת כפי שהיא בשמירה הבאה
+let LOADED_CHAIN = [];
 
 async function api(path, body){
   const opts = body
@@ -667,6 +679,7 @@ function populate(cfg, env){
   }
 
   const llm = cfg.llm || {};
+  LOADED_CHAIN = Array.isArray(llm.chain) ? llm.chain.filter(e => e && e.provider) : [];
   if(llm.provider){ el("llmProvider").value = llm.provider; providerChanged(); }
   if(llm.model) el("llmModel").value = llm.model;
   const keyName = ENV_BY_PROVIDER[el("llmProvider").value];

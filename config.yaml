@@ -5,8 +5,19 @@ language: he
 timezone: Asia/Jerusalem
 
 llm:
-  provider: anthropic
-  model: "claude-sonnet-5"
+  provider: gemini
+  model: "gemini-flash-latest"
+  # שרשרת גיבוי — מנוסה לפי הסדר. לכל דגם Gemini מכסה יומית נפרדת,
+  # ו-Groq הוא ספק מחברה אחרת ליום שבו גוגל כולה מקרטעת. הכל חינם.
+  chain:
+    - provider: gemini
+      model: "gemini-flash-latest"
+    - provider: gemini
+      model: "gemini-flash-lite-latest"
+    - provider: gemini
+      model: "gemini-3.1-flash-lite"
+    - provider: groq
+      model: "llama-3.3-70b-versatile"
 
 defaults:
   lookback_hours: 24

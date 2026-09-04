@@ -455,7 +455,7 @@ def test_quota_exhaustion_stops_further_calls(monkeypatch):
     item.content = "טקסט ארוך מספיק כדי לעבור את הסף " * 20
 
     for _ in range(5):
-        assert llm.summarize(item, "he", 5, "gemini", "m") == ""
+        assert llm.summarize(item, "he", 5, [("gemini", "m")]) == ""
 
     assert len(calls) == llm.QUOTA_STRIKES_BEFORE_STOP
     llm.reset_quota_state()
@@ -476,7 +476,7 @@ def test_ordinary_failure_does_not_trip_the_breaker(monkeypatch):
     item.content = "טקסט " * 100
 
     for _ in range(4):
-        llm.summarize(item, "he", 5, "gemini", "m")
+        llm.summarize(item, "he", 5, [("gemini", "m")])
 
     assert len(calls) == 4
     llm.reset_quota_state()
@@ -885,7 +885,7 @@ def test_transient_provider_error_trips_breaker_like_quota(monkeypatch):
     item.content = "טקסט ארוך מספיק כדי לעבור את הסף " * 20
 
     for _ in range(5):
-        assert llm.summarize(item, "he", 5, "gemini", "m") == ""
+        assert llm.summarize(item, "he", 5, [("gemini", "m")]) == ""
 
     assert len(calls) == llm.TRANSIENT_STRIKES_BEFORE_STOP
     llm.reset_transient_state()
@@ -1012,3 +1012,91 @@ def test_retry_delay_prefers_standard_header_over_google_format():
             return {}
 
     assert _retry_delay(FakeResponse()) == 13
+
+
+# ---------------------------------------------------------------------------
+# שרשרת גיבוי בין ספקים (_run_chain)
+# ---------------------------------------------------------------------------
+
+from src import llm  # noqa: E402
+
+def _chain_fake(monkeypatch, behaviour: dict):
+    """behaviour: (provider, model) -> str תשובה או Exception להעלאה. מתעד קריאות."""
+    calls: list[tuple[str, str]] = []
+
+    def fake_complete(prompt, provider, model):
+        calls.append((provider, model))
+        result = behaviour[(provider, model)]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    llm.reset_quota_state()
+    return calls
+
+
+def test_chain_uses_first_entry_when_it_works(monkeypatch):
+    calls = _chain_fake(monkeypatch, {("gemini", "a"): "תשובה", ("groq", "b"): "לא אמור להיקרא"})
+    assert llm._run_chain("p", [("gemini", "a"), ("groq", "b")], "x") == "תשובה"
+    assert calls == [("gemini", "a")]
+
+
+def test_chain_falls_through_on_quota(monkeypatch):
+    calls = _chain_fake(monkeypatch, {
+        ("gemini", "a"): llm.QuotaError("נגמרה המכסה"),
+        ("gemini", "b"): "מהגיבוי",
+    })
+    assert llm._run_chain("p", [("gemini", "a"), ("gemini", "b")], "x") == "מהגיבוי"
+    assert calls == [("gemini", "a"), ("gemini", "b")]
+
+
+def test_chain_falls_through_on_transient(monkeypatch):
+    calls = _chain_fake(monkeypatch, {
+        ("gemini", "a"): llm.TransientProviderError("503"),
+        ("groq", "b"): "מהגיבוי",
+    })
+    assert llm._run_chain("p", [("gemini", "a"), ("groq", "b")], "x") == "מהגיבוי"
+    assert calls == [("gemini", "a"), ("groq", "b")]
+
+
+def test_chain_missing_key_disables_entry_silently(monkeypatch):
+    calls = _chain_fake(monkeypatch, {
+        ("gemini", "a"): "ראשי",
+        ("groq", "b"): llm.MissingKeyError("אין GROQ_API_KEY"),
+    })
+    chain = [("groq", "b"), ("gemini", "a")]
+    assert llm._run_chain("p", chain, "x") == "ראשי"
+    # בקריאה השנייה החוליה החסרה כבר לא מנוסה בכלל
+    assert llm._run_chain("p", chain, "y") == "ראשי"
+    assert calls == [("groq", "b"), ("gemini", "a"), ("gemini", "a")]
+
+
+def test_chain_breaker_is_per_entry(monkeypatch):
+    calls = _chain_fake(monkeypatch, {
+        ("gemini", "a"): llm.QuotaError("מכסה"),
+        ("gemini", "b"): "גיבוי",
+    })
+    chain = [("gemini", "a"), ("gemini", "b")]
+    for _ in range(llm.QUOTA_STRIKES_BEFORE_STOP + 1):
+        assert llm._run_chain("p", chain, "x") == "גיבוי"
+    # אחרי מספיק פסילות, החוליה הראשונה מדולגת בלי לבזבז קריאה
+    assert calls[-1] == ("gemini", "b")
+    assert calls.count(("gemini", "a")) == llm.QUOTA_STRIKES_BEFORE_STOP
+    assert llm._run_chain("p", chain, "x") == "גיבוי"
+    assert calls.count(("gemini", "a")) == llm.QUOTA_STRIKES_BEFORE_STOP
+
+
+def test_chain_all_fail_returns_empty(monkeypatch):
+    _chain_fake(monkeypatch, {
+        ("gemini", "a"): llm.QuotaError("מכסה"),
+        ("groq", "b"): llm.TransientProviderError("timeout"),
+    })
+    assert llm._run_chain("p", [("gemini", "a"), ("groq", "b")], "x") == ""
+
+
+def test_summarize_returns_empty_when_chain_exhausted(monkeypatch):
+    _chain_fake(monkeypatch, {("gemini", "a"): llm.QuotaError("מכסה")})
+    item = _item()
+    item.content = "x" * 500
+    assert llm.summarize(item, "he", 5, [("gemini", "a")]) == ""

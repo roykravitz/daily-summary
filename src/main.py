@@ -79,7 +79,7 @@ def collect_topic(topic: Topic, cfg: Config, state: State, force: bool) -> list[
                 text = item.content.strip()
                 if needs_translation(text, cfg.language):
                     log.info("      קצר (%d תווים) בשפה זרה — מתרגם", len(text))
-                    text = translate(text, cfg.language, cfg.llm_provider, cfg.llm_model) or text
+                    text = translate(text, cfg.language, cfg.llm_chain) or text
                 else:
                     log.info("      קצר (%d תווים) — מוצג כלשונו", len(text))
                 results.append((item, text))
@@ -87,9 +87,7 @@ def collect_topic(topic: Topic, cfg: Config, state: State, force: bool) -> list[
 
             # מיקוד ברמת הנושא משמש כברירת מחדל למקורות שלא הגדירו משלהם
             item.focus = item.focus or topic.focus
-            summary = summarize(
-                item, cfg.language, topic.summary_bullets, cfg.llm_provider, cfg.llm_model
-            )
+            summary = summarize(item, cfg.language, topic.summary_bullets, cfg.llm_chain)
             if not summary:
                 continue
             log.info("      סוכם (%s, %d תווים)", item.content_kind, len(item.content))
@@ -143,8 +141,8 @@ def main() -> int:
         log.error("אין נושאים פעילים עם מקורות ב-config.yaml")
         return 1
 
-    log.info("מתחיל — %d נושאים, מודל %s/%s",
-             len(topics), cfg.llm_provider, cfg.llm_model or "ברירת מחדל")
+    chain_desc = " ← ".join(f"{p}/{m or 'ברירת מחדל'}" for p, m in cfg.llm_chain)
+    log.info("מתחיל — %d נושאים, שרשרת מודלים: %s", len(topics), chain_desc)
 
     state = State(ROOT / "state.json")
     sent_any = False
