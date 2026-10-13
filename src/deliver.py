@@ -10,7 +10,7 @@ from email.message import EmailMessage
 
 import requests
 
-from .compose import split_message
+from .compose import DIVIDER, split_message, to_plain, to_telegram_html
 
 log = logging.getLogger(__name__)
 
@@ -30,47 +30,65 @@ def _telegram_creds(target: dict) -> tuple[str, str]:
 def _send_photo_block(block: dict, token: str, chat_id: str) -> bool:
     """שולח תמונה אחת או אלבום, כשהטקסט של הפריט הוא הכיתוב."""
     images = block["images"][:MAX_IMAGES_PER_MESSAGE]
+    # חותכים לפני ההמרה ל-HTML, כדי לא לחתוך באמצע תגית
     caption = block["caption"][:CAPTION_LIMIT]
 
-    if len(images) == 1:
-        url = f"https://api.telegram.org/bot{token}/sendPhoto"
-        payload = {"chat_id": chat_id, "photo": images[0], "caption": caption}
-    else:
-        url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
-        media = [{"type": "photo", "media": u} for u in images]
-        media[0]["caption"] = caption
-        payload = {"chat_id": chat_id, "media": json.dumps(media)}
+    for html_mode in (True, False):
+        text = to_telegram_html(caption) if html_mode else to_plain(caption)
+        extra = {"parse_mode": "HTML"} if html_mode else {}
+        if len(images) == 1:
+            url = f"https://api.telegram.org/bot{token}/sendPhoto"
+            payload = {"chat_id": chat_id, "photo": images[0], "caption": text, **extra}
+        else:
+            url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
+            media = [{"type": "photo", "media": u} for u in images]
+            media[0]["caption"] = text
+            media[0].update(extra)
+            payload = {"chat_id": chat_id, "media": json.dumps(media)}
 
-    try:
-        resp = requests.post(url, data=payload, timeout=TIMEOUT)
-        if resp.ok:
-            return True
-        log.warning("שליחת תמונה נכשלה (%s): %s", resp.status_code, resp.text[:200])
-    except requests.RequestException as exc:
-        log.warning("שליחת תמונה נכשלה: %s", exc)
+        try:
+            resp = requests.post(url, data=payload, timeout=TIMEOUT)
+            if resp.ok:
+                return True
+            log.warning("שליחת תמונה נכשלה (%s): %s", resp.status_code, resp.text[:200])
+            if html_mode and _is_parse_error(resp):
+                continue  # העיצוב נדחה — מנסים שוב כטקסט רגיל
+        except requests.RequestException as exc:
+            log.warning("שליחת תמונה נכשלה: %s", exc)
+        break
 
     # התמונה לא עברה — לפחות שהטקסט יגיע
     return _send_text(caption, token, chat_id, {})
+
+
+def _is_parse_error(resp) -> bool:
+    """טלגרם מחזיר 400 'can't parse entities' כשה-HTML לא תקין."""
+    return resp.status_code == 400 and "parse" in resp.text.lower()
 
 
 def _send_text(text: str, token: str, chat_id: str, target: dict) -> bool:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     ok = True
     for chunk in split_message(text):
+        # מפצלים לפני ההמרה ל-HTML, כך שכל חלק מקבל זוגות הדגשה שלמים משלו
+        html_mode = True
         for attempt in range(3):
             try:
-                resp = requests.post(
-                    url,
-                    data={
-                        "chat_id": chat_id,
-                        "text": chunk,
-                        "disable_web_page_preview": True,
-                        "disable_notification": bool(target.get("silent")),
-                    },
-                    timeout=TIMEOUT,
-                )
+                data = {
+                    "chat_id": chat_id,
+                    "text": to_telegram_html(chunk) if html_mode else to_plain(chunk),
+                    "disable_web_page_preview": True,
+                    "disable_notification": bool(target.get("silent")),
+                }
+                if html_mode:
+                    data["parse_mode"] = "HTML"
+                resp = requests.post(url, data=data, timeout=TIMEOUT)
                 if resp.ok:
                     break
+                if html_mode and _is_parse_error(resp):
+                    log.warning("טלגרם דחה את העיצוב — שולח כטקסט רגיל: %s", resp.text[:200])
+                    html_mode = False
+                    continue
                 if resp.status_code == 429:
                     wait = resp.json().get("parameters", {}).get("retry_after", 5)
                     log.info("טלגרם ביקש להמתין %ss", wait)
@@ -165,9 +183,9 @@ def deliver(blocks: list[dict], targets: list[dict], language: str = "he") -> bo
     טלגרם מקבל את הבלוקים לפי סדרם, כדי שתמונה תגיע עם הטקסט שלה.
     אימייל ו-webhook מקבלים גרסת טקסט אחת.
     """
-    text = "\n\n".join(
+    text = to_plain(f"\n\n{DIVIDER}\n\n".join(
         b["text"] if b["type"] == "text" else b["caption"] for b in blocks
-    ).strip()
+    ).strip())
 
     any_ok = False
     for target in targets:

@@ -1,11 +1,35 @@
 """הרכבת ההודעה הסופית מתוך הפריטים שסוכמו."""
 from __future__ import annotations
 
+import html
+import re
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 TELEGRAM_LIMIT = 4096
 SAFE_CHUNK = 3800
+
+# קו בין מקור למקור — בתוך כל סיכום יש שורות ריקות בין הנקודות,
+# ובלי קו קשה לראות איפה נגמר מקור אחד ומתחיל הבא.
+DIVIDER = "━━━━━━━━━━━━"
+
+# **טקסט** מסמן הדגשה. נשמר כך לאורך כל הצנרת, ומומר רק ברגע השליחה.
+_BOLD_RE = re.compile(r"\*\*([^\n*][^\n]*?)\*\*")
+
+
+def to_telegram_html(text: str) -> str:
+    """ממיר **הדגשה** ל-<b> ומבריח את כל השאר, לשליחה עם parse_mode=HTML.
+
+    רק זוגות שלמים בתוך שורה הופכים לבולד. כוכביות יתומות (למשל אחרי
+    חיתוך לאורך כיתוב) נמחקות, כדי שטלגרם לא ידחה את ההודעה.
+    """
+    escaped = html.escape(text, quote=False)
+    return _BOLD_RE.sub(r"<b>\1</b>", escaped).replace("**", "")
+
+
+def to_plain(text: str) -> str:
+    """אותו טקסט בלי סימוני ההדגשה — לאימייל, ל-webhook ולגיבוי."""
+    return text.replace("**", "")
 
 HEADERS = {
     "he": "סיכום מידע יומי",
@@ -112,6 +136,9 @@ def _entry(item, summary: str, tz: str, language: str) -> str:
     if not item.title_is_content and not _title_repeats(item.title, summary):
         lines.append(item.title)
     lines.append(summary)
+    # בסיכום יש שורות ריקות בין הנקודות — הקישור מקבל שורה משלו ולא נדבק לנקודה האחרונה
+    if "\n\n" in summary:
+        lines.append("")
     lines.append(item.url)
     return "\n".join(lines)
 
@@ -136,7 +163,7 @@ def build_blocks(summaries: list[tuple], language: str, tz: str) -> list[dict]:
 
     def flush():
         if buffer:
-            blocks.append({"type": "text", "text": "\n\n".join(buffer)})
+            blocks.append({"type": "text", "text": f"\n\n{DIVIDER}\n\n".join(buffer)})
             buffer.clear()
 
     for item, summary in sorted(summaries, key=_by_time, reverse=True):
@@ -154,7 +181,7 @@ def build_message(summaries: list[tuple], language: str, tz: str) -> str:
     """גרסת טקסט אחת של כל העדכון — לאימייל, ל-webhook ולריצת יבש."""
     blocks = build_blocks(summaries, language, tz)
     parts = [b["text"] if b["type"] == "text" else b["caption"] for b in blocks]
-    return "\n\n".join(p for p in parts if p).strip()
+    return f"\n\n{DIVIDER}\n\n".join(p for p in parts if p).strip()
 
 
 def _title_repeats(title: str, summary: str) -> bool:

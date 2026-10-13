@@ -376,13 +376,151 @@ def test_bullets_kept_when_model_used_no_markers():
     from src.llm import _to_bullets
 
     out = _to_bullets("נקודה ראשונה\nנקודה שנייה")
-    assert out == "• נקודה ראשונה\n• נקודה שנייה"
+    assert out == "• נקודה ראשונה\n\n• נקודה שנייה"
 
 
 def test_bullets_normalise_dash_markers():
     from src.llm import _to_bullets
 
-    assert _to_bullets("- ראשונה\n– שנייה") == "• ראשונה\n• שנייה"
+    assert _to_bullets("- ראשונה\n– שנייה") == "• ראשונה\n\n• שנייה"
+
+
+def test_bullets_direction_line_becomes_bold_header():
+    from src.llm import _to_bullets
+
+    out = _to_bullets(
+        "כיוון: הדובר צופה ירידה לביטקוין. ממליץ להמתין עם קניות.\n"
+        "• **ביטקוין**: ירד ל-64,500, **צפוי להמשיך לרדת**.\n"
+        "• **נאסד\"ק**: ירד ב-0.29%."
+    )
+    lines = out.split("\n\n")
+    assert lines[0] == "🧭 **כיוון: הדובר צופה ירידה לביטקוין. ממליץ להמתין עם קניות.**"
+    assert lines[1] == "• **ביטקוין**: ירד ל-64,500, **צפוי להמשיך לרדת**."
+    assert len(lines) == 3
+
+
+@pytest.mark.parametrize("line", [
+    "**כיוון:** הדובר שורי על הזהב",
+    "🧭 כיוון הדובר: הדובר שורי על הזהב",
+    "**כיוון: הדובר שורי על הזהב**",
+])
+def test_bullets_direction_tolerates_model_wrapping(line):
+    from src.llm import _to_bullets
+
+    out = _to_bullets(line + "\n• **זהב**: עלה.")
+    assert out.startswith("🧭 **כיוון: הדובר שורי על הזהב**")
+    assert out.count("**") == 4  # שורת כיוון + כותרת נושא, בלי כוכביות כפולות מיותרות
+
+
+def test_bullets_without_direction_when_speaker_took_no_stance():
+    from src.llm import _to_bullets
+
+    out = _to_bullets("• **דיווח**: הבנק המרכזי השאיר את הריבית.")
+    assert "🧭" not in out
+    assert out == "• **דיווח**: הבנק המרכזי השאיר את הריבית."
+
+
+def test_bullets_bold_topic_line_without_marker_is_kept_intact():
+    """שורה שמתחילה ב-**נושא** היא נקודה — ואסור לקלף ממנה את הכוכביות."""
+    from src.llm import _to_bullets
+
+    out = _to_bullets("**אתריום**: יציב.\nמחשבה פנימית שדלפה")
+    assert out == "• **אתריום**: יציב."
+
+
+def test_bullets_unbold_numbers_and_names_keep_stance():
+    """דגם קל מדגיש כל מספר ושם. נשארת מודגשת רק העמדה של הדובר."""
+    from src.llm import _to_bullets
+
+    out = _to_bullets(
+        "• **מצב הביטקוין**: טווח בין **87,400** ל-**81 אלף**, ו**סטרטג'י** קנתה "
+        "**250 מטבעות**; הדובר **רואה בכך אינדיקציה לנטייה כלפי מעלה** "
+        "ו**ממליץ להמתין בצד**, **צופה המשך ירידה עד 81 אלף**."
+    )
+    assert out.startswith("• **מצב הביטקוין**:")  # כותרת הנושא נשארת
+    assert "**87,400**" not in out and "87,400" in out
+    assert "**81 אלף**" not in out
+    assert "**סטרטג'י**" not in out
+    assert "**250 מטבעות**" not in out
+    assert "**רואה בכך אינדיקציה לנטייה כלפי מעלה**" in out
+    assert "**ממליץ להמתין בצד**" in out
+    assert "**צופה המשך ירידה עד 81 אלף**" in out
+
+
+def test_prompt_asks_for_direction_and_bold_topics():
+    item = _item()
+    item.content = "טקסט"
+    prompt = build_prompt(item, "he", 5)
+    assert "כיוון:" in prompt
+    assert "אסור להמציא כיוון" in prompt
+    assert "**ביטקוין**" in prompt
+
+
+# ------------------------------------------------------------ הדגשה בטלגרם
+
+def test_telegram_html_bolds_and_escapes():
+    from src.compose import to_telegram_html
+
+    out = to_telegram_html("• **S&P 500**: מעל <5000> **שורי**")
+    assert out == "• <b>S&amp;P 500</b>: מעל &lt;5000&gt; <b>שורי</b>"
+
+
+def test_telegram_html_drops_orphan_markers():
+    """כיתוב שנחתך באמצע הדגשה לא יכול להשאיר כוכביות או תגית פתוחה."""
+    from src.compose import to_telegram_html
+
+    out = to_telegram_html("**שלם** ואז **חתוך")
+    assert out == "<b>שלם</b> ואז חתוך"
+    assert out.count("<b>") == out.count("</b>")
+
+
+def test_bold_never_spans_lines():
+    from src.compose import to_telegram_html
+
+    assert "<b>" not in to_telegram_html("**שורה\nאחרת**")
+
+
+def test_plain_strips_markers():
+    from src.compose import to_plain
+
+    assert to_plain("🧭 **כיוון: עלייה**") == "🧭 כיוון: עלייה"
+
+
+def test_entries_separated_by_divider():
+    from src.compose import DIVIDER
+
+    pairs = [(_item("א", "1"), "• **נושא**: x"), (_item("ב", "2"), "• y")]
+    msg = build_message(pairs, "he", "Asia/Jerusalem")
+    assert msg.count(DIVIDER) == 1
+
+
+class _Resp:
+    def __init__(self, status, text=""):
+        self.status_code, self.text, self.ok = status, text, status == 200
+
+    def json(self):
+        return {}
+
+
+def test_send_text_uses_html_and_falls_back_to_plain(monkeypatch):
+    from src import deliver
+
+    sent = []
+
+    def fake_post(url, data, timeout):
+        sent.append(data)
+        if data.get("parse_mode") == "HTML":
+            return _Resp(400, "Bad Request: can't parse entities")
+        return _Resp(200)
+
+    monkeypatch.setattr(deliver.requests, "post", fake_post)
+    monkeypatch.setattr(deliver.time, "sleep", lambda s: None)
+
+    assert deliver._send_text("🧭 **כיוון: עלייה**", "t", "c", {})
+    assert sent[0]["parse_mode"] == "HTML"
+    assert sent[0]["text"] == "🧭 <b>כיוון: עלייה</b>"
+    assert "parse_mode" not in sent[1]
+    assert sent[1]["text"] == "🧭 כיוון: עלייה"
 
 
 # ------------------------------------------------------------ תאריך פרסום
