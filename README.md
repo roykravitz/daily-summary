@@ -182,7 +182,7 @@ python scripts/gen_workflow.py
 .\scripts\install_task.ps1
 ```
 
-רושם משימה ב-Task Scheduler לפי השעות שב-`config.yaml`. להסרה:
+רושם משימה ב-Task Scheduler לפי השעות שב-`config.yaml`. המשימה רצה ברקע, בלי חלון שקופץ על המסך, ומה שקרה בכל ריצה נכתב ל-`logs\digest.log`. להסרה:
 
 ```powershell
 Unregister-ScheduledTask -TaskName "סיכום מידע יומי" -Confirm:$false

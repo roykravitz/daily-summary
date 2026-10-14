@@ -27,6 +27,10 @@ foreach ($t in $times.Trim().Split(" ")) {
 }
 
 $python = (Get-Command python).Source
+# pythonw רץ בלי חלון קונסול — הריצה המתוזמנת לא קופצת על המסך.
+# הלוג נכתב ל-logs\digest.log (ראה src/main.py).
+$pythonw = Join-Path (Split-Path -Parent $python) "pythonw.exe"
+if (Test-Path $pythonw) { $python = $pythonw }
 $action = New-ScheduledTaskAction -Execute $python `
     -Argument "-m src.main" -WorkingDirectory $root
 

@@ -12,6 +12,7 @@ import argparse
 import logging
 import sys
 from datetime import datetime, timedelta, timezone
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from .compose import build_blocks, build_message
@@ -24,6 +25,9 @@ from .state import State
 log = logging.getLogger("digest")
 
 
+LOG_FILE = ROOT / "logs" / "digest.log"
+
+
 def setup_logging(verbose: bool) -> None:
     # קונסולת חלונות היא cp1252 כברירת מחדל ומתה על עברית
     for stream in (sys.stdout, sys.stderr):
@@ -31,11 +35,29 @@ def setup_logging(verbose: bool) -> None:
             stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, OSError):
             pass
+
+    handlers: list[logging.Handler] = []
+    # תחת pythonw (המשימה המתוזמנת, בלי חלון) אין stdout בכלל
+    if sys.stdout is not None:
+        handlers.append(logging.StreamHandler(sys.stdout))
+    # תמיד גם לקובץ — כשהריצה ברקע, זה התיעוד היחיד למקרה של תקלה
+    try:
+        LOG_FILE.parent.mkdir(exist_ok=True)
+        file_handler = RotatingFileHandler(
+            LOG_FILE, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+        )
+        file_handler.setFormatter(
+            logging.Formatter("%(asctime)s  %(levelname)-7s %(message)s", "%Y-%m-%d %H:%M:%S")
+        )
+        handlers.append(file_handler)
+    except OSError:
+        pass
+
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s  %(levelname)-7s %(message)s",
         datefmt="%H:%M:%S",
-        stream=sys.stdout,
+        handlers=handlers or [logging.NullHandler()],
     )
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
