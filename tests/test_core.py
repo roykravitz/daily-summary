@@ -1238,3 +1238,35 @@ def test_summarize_returns_empty_when_chain_exhausted(monkeypatch):
     item = _item()
     item.content = "x" * 500
     assert llm.summarize(item, "he", 5, [("gemini", "a")]) == ""
+
+
+# ------------------------------------------------------------ כמה נמענים לנושא
+
+def test_chat_ids_split_on_commas():
+    from src.deliver import _chat_ids
+
+    assert _chat_ids("111, 222,,333") == ["111", "222", "333"]
+    assert _chat_ids("111") == ["111"]
+    assert _chat_ids("") == []
+
+
+def test_blocks_sent_to_every_recipient_and_one_failure_is_tolerated(monkeypatch):
+    from src import deliver
+
+    sent_to = []
+
+    def fake_send_text(text, token, chat_id, target):
+        sent_to.append(chat_id)
+        return chat_id != "222"  # הנמען השני חסם את הבוט
+
+    monkeypatch.setattr(deliver, "_send_text", fake_send_text)
+    monkeypatch.setattr(deliver.time, "sleep", lambda s: None)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID_X", "111,222")
+
+    ok = deliver.send_telegram_blocks(
+        [{"type": "text", "text": "א"}, {"type": "text", "text": "ב"}],
+        {"type": "telegram", "chat_id_env": "TELEGRAM_CHAT_ID_X"},
+    )
+    assert ok  # הנמען הראשון קיבל — לא שולחים לו שוב בריצה הבאה
+    assert sent_to == ["111", "111", "222", "222"]

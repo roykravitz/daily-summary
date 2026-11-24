@@ -106,33 +106,51 @@ def _send_text(text: str, token: str, chat_id: str, target: dict) -> bool:
     return ok
 
 
+def _chat_ids(chat_id: str) -> list[str]:
+    """כמה נמענים לאותו נושא: מזהים מופרדים בפסיק, למשל 111,222."""
+    return [c.strip() for c in chat_id.replace(";", ",").split(",") if c.strip()]
+
+
 def send_telegram_blocks(blocks: list[dict], target: dict) -> bool:
-    """שולח את הבלוקים לפי הסדר, כך שכל תמונה מגיעה עם הטקסט שלה."""
+    """שולח את הבלוקים לפי הסדר לכל נמען, כך שכל תמונה מגיעה עם הטקסט שלה.
+
+    מחזיר True אם לפחות נמען אחד קיבל הכל. נמען שנכשל (למשל חסם את הבוט)
+    לא גורם לשליחה חוזרת לכל השאר בריצה הבאה.
+    """
     token, chat_id = _telegram_creds(target)
     if not token:
         log.error("חסר טוקן טלגרם (%s)", target.get("bot_token_env") or "TELEGRAM_BOT_TOKEN")
         return False
-    if not chat_id:
+    recipients = _chat_ids(chat_id)
+    if not recipients:
         log.error("חסר chat id לטלגרם (%s)", target.get("chat_id_env") or "TELEGRAM_CHAT_ID")
         return False
 
-    ok = True
-    for block in blocks:
-        if block["type"] == "photo":
-            ok = _send_photo_block(block, token, chat_id) and ok
+    any_ok = False
+    for recipient in recipients:
+        ok = True
+        for block in blocks:
+            if block["type"] == "photo":
+                ok = _send_photo_block(block, token, recipient) and ok
+            else:
+                ok = _send_text(block["text"], token, recipient, target) and ok
+            time.sleep(0.4)
+        if ok:
+            any_ok = True
         else:
-            ok = _send_text(block["text"], token, chat_id, target) and ok
-        time.sleep(0.4)
-    return ok
+            log.error("השליחה לנמען %s לא הושלמה", recipient)
+    return any_ok
 
 
 def send_telegram(text: str, target: dict) -> bool:
     """שליחת טקסט בלבד — נשמר עבור קוראים שאין להם בלוקים."""
     token, chat_id = _telegram_creds(target)
-    if not (token and chat_id):
+    recipients = _chat_ids(chat_id)
+    if not (token and recipients):
         log.error("חסרים פרטי טלגרם")
         return False
-    return _send_text(text, token, chat_id, target)
+    results = [_send_text(text, token, r, target) for r in recipients]
+    return any(results)
 
 
 def send_email(text: str, target: dict) -> bool:
